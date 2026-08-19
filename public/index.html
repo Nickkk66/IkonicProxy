@@ -25,17 +25,27 @@
 
     <details class="settings">
       <summary>Backend settings</summary>
-      <p class="hint">
-        The backend runs on the owner's PC. Paste the address Cloudflare Tunnel prints &mdash;
-        <code>https://</code> is fine, it gets converted. Stored in this browser only.
-      </p>
-      <div class="row">
-        <input id="wisp" type="text" placeholder="https://your-tunnel.trycloudflare.com" />
+
+      <div id="locked">
+        <p class="hint">Enter the password to view or change the backend.</p>
+        <div class="row">
+          <input id="pw" type="password" placeholder="Password" autocomplete="off" />
+          <button id="unlock" type="button">Unlock</button>
+        </div>
       </div>
-      <div class="row">
-        <input id="pw" type="password" placeholder="Password" autocomplete="off" />
-        <button id="save" type="button">Save</button>
-        <button id="reset" type="button" class="secondary">Reset</button>
+
+      <div id="unlocked" hidden>
+        <p class="hint">
+          The backend runs on the owner's PC. Paste the address Cloudflare Tunnel prints &mdash;
+          <code>https://</code> is fine, it gets converted. Stored in this browser only.
+        </p>
+        <div class="row">
+          <input id="wisp" type="text" placeholder="https://your-tunnel.trycloudflare.com" />
+        </div>
+        <div class="row">
+          <button id="save" type="button">Save</button>
+          <button id="reset" type="button" class="secondary">Reset to default</button>
+        </div>
       </div>
     </details>
   </body>

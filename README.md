@@ -37,8 +37,9 @@ Quick tunnels get a new random hostname on every restart. For a stable address, 
 share the link with do not have to configure anything. When the quick tunnel rotates its
 hostname, update that constant and push -- Pages redeploys automatically.
 
-Changing the backend from the UI requires a password. It is stored as a SHA-256 hash rather
-than in the clear, since this repo is public.
+The settings panel is locked: the backend address is not shown or written into the page until
+the password is entered. The password is stored as a SHA-256 hash rather than in the clear,
+since this repo is public.
 
 **This password is not security.** The page is static, so `app.js` is readable by anyone and
 the check can be bypassed from devtools in seconds. It prevents accidental edits by people you

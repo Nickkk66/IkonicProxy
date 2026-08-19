@@ -22,6 +22,9 @@ const address = document.getElementById("address");
 const wispInput = document.getElementById("wisp");
 const pwInput = document.getElementById("pw");
 const status = document.getElementById("status");
+const lockedEl = document.getElementById("locked");
+const unlockedEl = document.getElementById("unlocked");
+const unlockBtn = document.getElementById("unlock");
 const saveBtn = document.getElementById("save");
 const resetBtn = document.getElementById("reset");
 
@@ -65,15 +68,21 @@ function normalizeWisp(raw) {
   return u.toString();
 }
 
-wispInput.value = getWispUrl();
-
-saveBtn.addEventListener("click", async () => {
+// The backend address is only written into the DOM once unlocked.
+unlockBtn.addEventListener("click", async () => {
   if ((await sha256hex(pwInput.value)) !== PW_HASH) {
     setStatus("Wrong password.", "err");
     pwInput.value = "";
     return;
   }
+  pwInput.value = "";
+  wispInput.value = getWispUrl();
+  lockedEl.hidden = true;
+  unlockedEl.hidden = false;
+  setStatus("");
+});
 
+saveBtn.addEventListener("click", () => {
   const url = normalizeWisp(wispInput.value);
   if (!url) {
     setStatus("Could not read that as a URL.", "err");
@@ -85,22 +94,14 @@ saveBtn.addEventListener("click", async () => {
     setStatus("This page is HTTPS, so the backend must be wss:// (not ws://).", "err");
     return;
   }
-
   localStorage.setItem(WISP_KEY, url);
   wispInput.value = url;
-  pwInput.value = "";
   setStatus("Saved: " + url, "ok");
 });
 
-resetBtn.addEventListener("click", async () => {
-  if ((await sha256hex(pwInput.value)) !== PW_HASH) {
-    setStatus("Wrong password.", "err");
-    pwInput.value = "";
-    return;
-  }
+resetBtn.addEventListener("click", () => {
   localStorage.removeItem(WISP_KEY);
   wispInput.value = DEFAULT_WISP;
-  pwInput.value = "";
   setStatus("Reset to the default backend.", "ok");
 });
 
