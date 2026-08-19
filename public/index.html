@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Scramjet</title>
+    <link rel="stylesheet" href="style.css" />
+    <!-- Relative, not root-absolute: Pages serves this from /<repo>/ -->
+    <script src="scram/scramjet.all.js"></script>
+    <script src="baremux/index.js"></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <h1>Scramjet</h1>
+      <p class="sub">Self-hosted proxy &mdash; frontend on Pages, wisp backend on your PC.</p>
+    </header>
+
+    <form id="form">
+      <input id="address" type="text" placeholder="Enter a URL or search term" autocomplete="off" />
+      <button type="submit">Go</button>
+    </form>
+
+    <p id="status"></p>
+
+    <details class="settings">
+      <summary>Backend settings</summary>
+      <p class="hint">
+        The wisp backend runs on your home PC. Paste the <code>wss://</code> address your
+        Cloudflare Tunnel gives you. It is stored in this browser only.
+      </p>
+      <div class="row">
+        <input id="wisp" type="text" placeholder="wss://your-tunnel.trycloudflare.com/wisp/" />
+        <button id="save" type="button">Save</button>
+      </div>
+    </details>
+  </body>
+</html>
