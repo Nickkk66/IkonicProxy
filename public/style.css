@@ -45,3 +45,5 @@ code { background: #161a22; padding: .1rem .35rem; border-radius: 4px; }
   margin: 1.5rem auto 0; max-width: 1200px;
   border: 1px solid var(--border); border-radius: 8px; background: #fff;
 }
+.row + .row { margin-top: .5rem; }
+button.secondary { background: #2a3140; }

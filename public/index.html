@@ -26,12 +26,16 @@
     <details class="settings">
       <summary>Backend settings</summary>
       <p class="hint">
-        The wisp backend runs on your home PC. Paste the <code>wss://</code> address your
-        Cloudflare Tunnel gives you. It is stored in this browser only.
+        The backend runs on the owner's PC. Paste the address Cloudflare Tunnel prints &mdash;
+        <code>https://</code> is fine, it gets converted. Stored in this browser only.
       </p>
       <div class="row">
-        <input id="wisp" type="text" placeholder="wss://your-tunnel.trycloudflare.com/wisp/" />
+        <input id="wisp" type="text" placeholder="https://your-tunnel.trycloudflare.com" />
+      </div>
+      <div class="row">
+        <input id="pw" type="password" placeholder="Password" autocomplete="off" />
         <button id="save" type="button">Save</button>
+        <button id="reset" type="button" class="secondary">Reset</button>
       </div>
     </details>
   </body>

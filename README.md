@@ -24,15 +24,25 @@ npm start          # http://localhost:8080
 cloudflared tunnel --url http://localhost:8080
 ```
 
-This prints a `https://<random>.trycloudflare.com` URL. On the deployed site, open
-**Backend settings** and enter:
-
-```
-wss://<random>.trycloudflare.com/wisp/
-```
+This prints a `https://<random>.trycloudflare.com` URL. Paste it straight into
+**Backend settings** on the site -- `https://` is converted to `wss://` and `/wisp/` is
+appended automatically.
 
 Quick tunnels get a new random hostname on every restart. For a stable address, log in with
 `cloudflared tunnel login` and create a named tunnel bound to a domain.
+
+## Sharing
+
+`DEFAULT_WISP` in `public/app.js` is the backend everyone gets out of the box, so people you
+share the link with do not have to configure anything. When the quick tunnel rotates its
+hostname, update that constant and push -- Pages redeploys automatically.
+
+Changing the backend from the UI requires a password. It is stored as a SHA-256 hash rather
+than in the clear, since this repo is public.
+
+**This password is not security.** The page is static, so `app.js` is readable by anyone and
+the check can be bypassed from devtools in seconds. It prevents accidental edits by people you
+shared the link with; it does not keep out anyone who wants in.
 
 ## Notes
 
