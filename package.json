@@ -4,14 +4,17 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "setup": "node scripts/setup.js",
     "start": "node src/server.js",
     "assets": "node scripts/copy-assets.js"
   },
   "dependencies": {
     "@mercuryworkshop/bare-mux": "^2.1.9",
+    "@mercuryworkshop/epoxy-transport": "^3.0.1",
     "@mercuryworkshop/libcurl-transport": "^1.5.2",
     "@mercuryworkshop/scramjet": "https://github.com/MercuryWorkshop/scramjet/releases/download/v1.1.0/mercuryworkshop-scramjet-1.1.0.tgz",
     "@mercuryworkshop/wisp-js": "^0.4.1",
+    "@titaniumnetwork-dev/ultraviolet": "^3.2.10",
     "ws": "^8.18.3"
   }
 }

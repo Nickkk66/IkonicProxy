@@ -1,4 +1,4 @@
-# scramjet-selfhost
+# Ikonic
 
 A self-hosted [Scramjet](https://github.com/MercuryWorkshop/scramjet) deployment, split across two hosts:
 
@@ -10,21 +10,61 @@ A self-hosted [Scramjet](https://github.com/MercuryWorkshop/scramjet) deployment
 GitHub Pages executes no server code, so the wisp backend **must** run on your machine and be
 reachable over `wss://`. Cloudflare Tunnel provides that for free without port forwarding.
 
+## Setup
+
+```bash
+npm run setup      # or double-click setup.cmd on Windows
+```
+
+Checks that everything needed is present — Node 18+, dependencies, the browser assets in
+`public/`, the frontend files, and `cloudflared` — and offers to run `npm install` or
+`npm run assets` for whatever is missing. Then it opens a menu:
+
+```
+Proxy:  running on port 8080 (pid 22816)
+Tunnel: https://outlet-fleece-onion-compromise.trycloudflare.com
+
+  1) Stop the proxy
+  2) Stop the tunnel
+  3) Use that address as the site default (edits public/app.js)
+  4) Close
+```
+
+Each entry flips to its opposite depending on what is running, so option 1 reads **Start the
+proxy** when it is stopped. Option 3 only appears once a tunnel address is known; it rewrites
+`DEFAULT_WISP` in `public/app.js` for you, which still has to be committed and pushed before
+the Pages site uses it.
+
+Both the proxy and the tunnel are started detached — output in `proxy.log` and `tunnel.log`,
+pids in `.proxy.pid` and `.tunnel.pid` — so closing the menu leaves them running.
+Non-interactive forms for scripts and shortcuts:
+
+```bash
+node scripts/setup.js check          # checks only; exit 1 if something is missing
+node scripts/setup.js start
+node scripts/setup.js status         # proxy and tunnel
+node scripts/setup.js stop
+node scripts/setup.js tunnel         # prints the trycloudflare address
+node scripts/setup.js tunnel-stop
+```
+
 ## Local development
 
 ```bash
 npm install
-npm run assets     # copy scramjet/libcurl/baremux into public/
-npm start          # http://localhost:8080
+npm run assets     # copy the proxy assets into public/m/ (renamed)
+npm start          # http://localhost:8080, runs in the foreground
 ```
 
 ## Exposing the backend
+
+`npm run setup` can do this for you (**Start a tunnel**), or by hand:
 
 ```bash
 cloudflared tunnel --url http://localhost:8080
 ```
 
-This prints a `https://<random>.trycloudflare.com` URL. Paste it straight into
+Either way you get a free `https://<random>.trycloudflare.com` URL. Paste it straight into
 **Backend settings** on the site -- `https://` is converted to `wss://` and `/wisp/` is
 appended automatically.
 
@@ -37,13 +77,24 @@ Quick tunnels get a new random hostname on every restart. For a stable address, 
 share the link with do not have to configure anything. When the quick tunnel rotates its
 hostname, update that constant and push -- Pages redeploys automatically.
 
-The settings panel is locked: the backend address is not shown or written into the page until
-the password is entered. The password is stored as a SHA-256 hash rather than in the clear,
-since this repo is public.
+The settings are doubly hidden. Nothing about the backend appears on the page at all until the
+pass phrase (`MAGIC_WORD` in `public/app.js`, currently **rich**) is typed into the search box;
+that reveals a panel which still asks for the password before showing or changing the address.
+The password is stored as a SHA-256 hash rather than in the clear, since this repo is public.
 
-**This password is not security.** The page is static, so `app.js` is readable by anyone and
-the check can be bypassed from devtools in seconds. It prevents accidental edits by people you
-shared the link with; it does not keep out anyone who wants in.
+**Neither of these is security.** The page is static, so `app.js` is readable by anyone and
+both checks can be bypassed from devtools in seconds. They keep the panel out of the way of
+people you shared the link with; they do not keep out anyone who wants in.
+
+Everything diagnostic lives inside that panel and nowhere else. The backend indicator (which
+opens the wisp socket and drops it again to see whether the machine is awake) is in there, and
+so is the text of the last failure. The front page only ever says `Error` — service worker
+failures, transport failures and the rest are filed in the panel rather than printed on screen.
+
+When a page fails to load, Scramjet's own error screen (full stack trace, proxied URL, build
+number, backend hostname) is replaced by a plain “That didn't load” page. Typing the pass
+phrase on that page brings the original diagnostics back — the swap happens in `public/sw.js`,
+which carries the real page along inside the replacement.
 
 ## Notes
 
@@ -54,6 +105,55 @@ shared the link with; it does not keep out anyone who wants in.
   (`/<repo>/`) works without a custom domain.
 - This pins Scramjet v1.1.0, matching the upstream reference app. v1 logs a notice recommending
   v2; upgrading is a follow-up.
+- The start screen has a **Home / AI** segmented switch (top-centre, sliding indicator). **AI** opens **IkonAI** — Google Gemini embedded under an IkonAI header (labelled “Runs on Google Gemini”), always via Ultraviolet, preloaded in the background on load so it opens instantly.
+- **Panic** is now a hotkey, set via the settings cog (top-right of Home): press the bound key anywhere to redirect the whole tab to plain `google.com` and attempt to close it. The toolbar panic button was removed.
+- The toolbar address bar shows a **Go** button (external-link icon) once you type, for no-keyboard use. Both engines' failure pages (Scramjet and Ultraviolet) are masked by the same custom page; typing the pass phrase on it reveals the real diagnostics.
+- In fullscreen the toolbar auto-hides; a 16px strip at the top of the screen brings it back on hover (pure CSS, `body.fs #peek:hover + #toolbar`).
+- The logo (hero mark and favicon) is an inline SVG in `public/index.html` — an app-icon-style rounded square with a keyhole, no external image file.
+- Bookmarks are saved per-browser (localStorage `ikonic.bookmarks`). The star in the browser
+  toolbar toggles the current page; saved pages show as tiles under **Bookmarks** on the
+  start screen. Tiles are letter-avatars derived from the hostname — no favicon is fetched
+  from the real site, which would defeat the point of the proxy.
+- The first page opens behind the start screen: the button you clicked spins in place and the
+  screen only flips to the browser once the page is in, so it does not blank out mid-click.
+- The launcher icons in `public/icons/` are each site's own favicon, downloaded once and
+  committed. Nothing is fetched from a third-party icon service at runtime.
+- `public/sw.js` calls `skipWaiting()` and `clients.claim()`. Without them an edited worker
+  sits in “waiting” until every tab using the old one is closed, and changes to it look like
+  they simply did not happen.
+- Search defaults to DuckDuckGo. Google fingerprints proxied traffic and answers most searches
+  through here with a reCAPTCHA “unusual traffic” page: every request arrives from one home IP
+  with a rewritten browser fingerprint, which is exactly what its bot heuristics look for.
+  DuckDuckGo does not care. Google still works if you type it in; expect challenges.
+- Two rewriters ship, both inside the one service worker and told apart by URL prefix:
+  **Scramjet** (`m/p1/`) and **Ultraviolet** (`m/p2/`). The engine picker has three settings and
+  defaults to **Smart**: Ultraviolet on the chat sites (its uploads work where Scramjet v1's
+  hang) and Scramjet everywhere else. The chat-site list is `AI_HOSTS` in `public/app.js`. A
+  navigation that needs the other engine rebuilds the frame, so switching between a normal site
+  and a chat site Just Works. `public/cfg.js` replaces Ultraviolet's stock config because that
+  one hardcodes root-absolute paths, which break on a `/<repo>/` project site.
+- **Asset names are de-signatured.** Everything the browser fetches lives under `public/m/`
+  with neutral names (`m/e1/e1.js`, `m/e2/e2.js`, `m/p1/`, `m/p2/`, ...) rather than
+  `scram/scramjet.all.js`, `/uv/service/` and friends, which content-inspecting school filters
+  (Linewize, Securly, GoGuardian, ...) match on. `scripts/copy-assets.js` owns the mapping.
+  Caveat: the minified bundle *bodies* still contain their original identifiers
+  (`$scramjet`, `__uv$config`, `Ultraviolet`); renaming the files does not rewrite those, so a
+  filter doing deep JS content-inspection can still fingerprint it. Fully evading that needs a
+  rebuilt ("forked") bundle, which this does not do.
+- Two transports ship: **libcurl** (WASM curl, the default) and **epoxy** (Rust TLS). The
+  picker is at the top of the pass-phrase panel and needs no password. libcurl is the one that
+  throws `error code 35: SSL connect error` on some hosts and stalls on some uploads, so epoxy
+  is the first thing to try when a site misbehaves. The choice is per-browser and applies from
+  the next page you open.
+- File uploads to ChatGPT, Gemini and DuckDuckGo hang on an endless spinner under Scramjet, on
+  either transport. Chatting works, so this is not the site blocking you — a challenge shows an
+  error, not a spinner. Smart mode routes those sites through Ultraviolet automatically, which
+  is why uploads work; forcing Scramjet on them brings the hang back.
+  One candidate cause, visible in `public/m/e1/e1.js`: with `syncxhr` off, Scramjet
+  v1's `XMLHttpRequest.prototype.send` hook logs `ignoring request - sync xhr disabled in flags`
+  and returns without sending anything — no request, no error, no events, so a caller waits
+  forever. `syncxhr` needs `SharedArrayBuffer`, which needs COOP/COEP headers, which GitHub
+  Pages cannot set.
 
 ## Licence
 

@@ -2,51 +2,217 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Scramjet</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Ikonic</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1.5' y='1.5' width='21' height='21' rx='6' fill='%235b8cff'/%3E%3Crect x='8' y='11' width='8' height='6.6' rx='1.4' fill='%230c1020'/%3E%3Cpath d='M9.3 11V9.2a2.7 2.7 0 0 1 5.4 0V11' fill='none' stroke='%230c1020' stroke-width='1.6'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="style.css" />
     <!-- Relative, not root-absolute: Pages serves this from /<repo>/ -->
-    <script src="scram/scramjet.all.js"></script>
-    <script src="baremux/index.js"></script>
+    <script src="m/e1/e1.js"></script>
+    <script src="m/mx/index.js"></script>
     <script src="app.js" defer></script>
   </head>
   <body>
-    <header>
-      <h1>Scramjet</h1>
-      <p class="sub">Self-hosted proxy &mdash; frontend on Pages, wisp backend on your PC.</p>
-    </header>
+    <main id="landing">
+      <div class="corner">
+        <button id="cog" class="cog" type="button" title="Settings" aria-label="Settings" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
 
-    <form id="form">
-      <input id="address" type="text" placeholder="Enter a URL or search term" autocomplete="off" />
-      <button type="submit">Go</button>
-    </form>
-
-    <p id="status"></p>
-
-    <details class="settings">
-      <summary>Backend settings</summary>
-
-      <div id="locked">
-        <p class="hint">Enter the password to view or change the backend.</p>
-        <div class="row">
-          <input id="pw" type="password" placeholder="Password" autocomplete="off" />
-          <button id="unlock" type="button">Unlock</button>
+        <div id="cogpanel" class="cogpanel" hidden>
+          <h3>Panic key</h3>
+          <p class="hint">Press this key anytime to leave instantly for Google.</p>
+          <div class="row">
+            <button id="hotkey-set" type="button" class="hotkey">Not set</button>
+            <button id="hotkey-clear" type="button" class="secondary">Clear</button>
+          </div>
+          <button id="panic-now" type="button" class="panic-now">Panic now</button>
         </div>
       </div>
 
-      <div id="unlocked" hidden>
-        <p class="hint">
-          The backend runs on the owner's PC. Paste the address Cloudflare Tunnel prints &mdash;
-          <code>https://</code> is fine, it gets converted. Stored in this browser only.
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <span class="tab-indicator" aria-hidden="true"></span>
+        <button class="tab active" data-tab="home" type="button" role="tab" aria-selected="true">Home</button>
+        <button class="tab tab-ai" data-tab="ai" type="button" role="tab" aria-selected="false" aria-label="AI">
+          <span class="star"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.6 6.6L21 9.3l-5 4.3 1.6 6.8L12 16.8 6.4 20.4 8 13.6l-5-4.3 6.4-.7z"/></svg></span>
+        </button>
+      </nav>
+
+      <div class="view active" id="view-home">
+      <div class="hero">
+        <div class="brand">
+          <svg class="logo" viewBox="0 0 24 24" role="img" aria-label="Ikonic logo">
+            <rect class="badge" x="1.5" y="1.5" width="21" height="21" rx="6" />
+            <rect class="lockbody" x="8" y="11" width="8" height="6.6" rx="1.4" />
+            <path class="shackle" d="M9.3 11V9.2a2.7 2.7 0 0 1 5.4 0V11" />
+          </svg>
+          <h1 class="wordmark">Ikonic</h1>
+        </div>
+        <p class="tagline">Real internet privacy</p>
+
+        <form id="form" role="search">
+          <svg class="glass" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M16.5 16.5 L21 21" />
+          </svg>
+          <input
+            id="address"
+            type="text"
+            placeholder="Search, or paste a link"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            aria-label="Search or enter a URL"
+          />
+          <button id="go" type="submit"><span>Go</span></button>
+        </form>
+
+        <p id="status" role="status"></p>
+
+        <nav class="ai" aria-label="AI">
+          <button type="button" data-url="https://duck.ai/">
+            <img src="icons/duckai.ico" alt="" width="20" height="20" />
+            <span>Duck.ai</span>
+          </button>
+          <button type="button" data-url="https://chatgpt.com">
+            <img src="icons/chatgpt.webp" alt="" width="20" height="20" />
+            <span>ChatGPT</span>
+          </button>
+          <button type="button" data-url="https://claude.ai/new">
+            <img src="icons/claude.ico" alt="" width="20" height="20" />
+            <span>Claude</span>
+          </button>
+          <button type="button" data-url="https://gemini.google.com/app">
+            <img src="icons/gemini.png" alt="" width="20" height="20" />
+            <span>Gemini</span>
+          </button>
+        </nav>
+
+        <nav class="sites" aria-label="Shortcuts">
+          <button type="button" data-url="https://duckduckgo.com" title="DuckDuckGo" aria-label="DuckDuckGo">
+            <img src="icons/duckduckgo.ico" alt="" width="18" height="18" />
+          </button>
+          <button type="button" data-url="https://www.youtube.com" title="YouTube" aria-label="YouTube">
+            <img src="icons/youtube.ico" alt="" width="18" height="18" />
+          </button>
+          <button type="button" data-url="https://www.wikipedia.org" title="Wikipedia" aria-label="Wikipedia">
+            <img src="icons/wikipedia.ico" alt="" width="18" height="18" />
+          </button>
+        </nav>
+
+        <!-- Populated from localStorage by app.js; the whole block hides when
+             there are no bookmarks. -->
+        <section id="bookmarks" class="bookmarks" hidden>
+          <h2 class="listhead">Bookmarks</h2>
+          <div id="bookmarklist" class="tiles"></div>
+        </section>
+      </div>
+
+      <!-- Everything diagnostic lives in here, and this panel does not exist
+           until the pass phrase is typed: backend state, the settings, and
+           whatever the last error actually said. -->
+      <section id="settings" hidden>
+        <div class="settings-head">
+          <h2>Backend</h2>
+          <button id="settingsclose" type="button" title="Close" aria-label="Close settings">&#10005;</button>
+        </div>
+
+        <p class="state">
+          <span id="beacondot" class="dot checking"></span>
+          <span id="beacontext">checking backend</span>
         </p>
-        <div class="row">
-          <input id="wisp" type="text" placeholder="https://your-tunnel.trycloudflare.com" />
+
+        <p class="hint">Engine. Smart uses Ultraviolet on chat sites (for uploads) and Scramjet everywhere else.</p>
+        <div class="row transport">
+          <label><input type="radio" name="engine" value="auto" /> Smart</label>
+          <label><input type="radio" name="engine" value="scramjet" /> Scramjet</label>
+          <label><input type="radio" name="engine" value="uv" /> Ultraviolet</label>
         </div>
-        <div class="row">
-          <button id="save" type="button">Save</button>
-          <button id="reset" type="button" class="secondary">Reset to default</button>
+
+        <p class="hint">Transport. Switch if uploads hang or sites fail with SSL errors.</p>
+        <div class="row transport">
+          <label><input type="radio" name="transport" value="libcurl" /> libcurl</label>
+          <label><input type="radio" name="transport" value="epoxy" /> epoxy</label>
+        </div>
+
+        <div id="locked">
+          <p class="hint">Enter the password to view or change the backend.</p>
+          <div class="row">
+            <input id="pw" type="password" placeholder="Password" autocomplete="off" />
+            <button id="unlock" type="button">Unlock</button>
+          </div>
+        </div>
+
+        <div id="unlocked" hidden>
+          <p class="hint">
+            The backend runs on the owner's PC. Paste the address Cloudflare Tunnel prints &mdash;
+            <code>https://</code> is fine, it gets converted. Stored in this browser only.
+          </p>
+          <div class="row">
+            <input id="wisp" type="text" placeholder="https://your-tunnel.trycloudflare.com" />
+          </div>
+          <div class="row">
+            <button id="save" type="button">Save</button>
+            <button id="reset" type="button" class="secondary">Reset to default</button>
+          </div>
+        </div>
+
+        <div id="diagnostics" hidden>
+          <h3>Last error</h3>
+          <pre id="lasterror"></pre>
+        </div>
+      </section>
+      </div>
+
+      <div class="view" id="view-ai">
+        <div class="ikonai">
+          <div class="ikonai-stage" id="ai-stage">
+            <div class="ikonai-loading" id="ai-loading">
+              <div class="fluid"><span></span><span></span><span></span></div>
+              <p>Warming up IkonAI…</p>
+            </div>
+          </div>
         </div>
       </div>
-    </details>
+    </main>
+
+    <!-- Once a page is opened the whole viewport becomes a browser: a slim
+         toolbar on top, the site filling everything below it. -->
+    <div id="browser" hidden>
+      <!-- In fullscreen the toolbar hides; this thin strip at the very top
+           brings it back on hover. -->
+      <div id="peek" aria-hidden="true"></div>
+      <div id="toolbar">
+        <button id="back" type="button" class="icon" title="Back" aria-label="Back">&#8249;</button>
+        <button id="forward" type="button" class="icon" title="Forward" aria-label="Forward">&#8250;</button>
+        <button id="reload" type="button" class="icon" title="Reload" aria-label="Reload">&#8635;</button>
+        <form id="navform">
+          <input id="navurl" type="text" spellcheck="false" autocomplete="off"
+                 autocapitalize="off" aria-label="Address" />
+          <!-- Appears once there is something to submit, so no-keyboard users
+               have a Go to press. -->
+          <button id="navgo" type="submit" title="Go" aria-label="Go" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 3h6v6" /><path d="M10 14 21 3" />
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6" />
+            </svg>
+            <span>Go</span>
+          </button>
+        </form>
+        <button id="fullscreen" type="button" class="icon" title="Fullscreen" aria-label="Fullscreen">&#9974;</button>
+        <button id="bookmark" type="button" class="icon" title="Bookmark this page" aria-label="Bookmark this page" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.5h12a1.5 1.5 0 0 1 1.5 1.5v18l-7.5-4.3L4.5 22V4A1.5 1.5 0 0 1 6 2.5z"/></svg>
+        </button>
+        <button id="close" type="button" class="icon" title="Close" aria-label="Close">&#10005;</button>
+      </div>
+      <p id="berror" hidden></p>
+      <div id="viewport">
+        <!-- Sits over the frame while it loads, so a half-painted page never
+             flashes white on the way in. -->
+        <div id="spinner" hidden><span class="ring"></span></div>
+      </div>
+    </div>
   </body>
 </html>
