@@ -132,6 +132,31 @@ way an open relay gets discovered and abused. It does not hide the token from an
 the site: the page is static and public, so the token is readable in devtools like everything
 else here. Real per-user authentication needs a server-side gate, not a static frontend.
 
+## When pages are slow
+
+```bash
+npm run doctor
+```
+
+Summarises what the backend has failed to reach (from `proxy.log`), then times DNS and TCP
+against those hosts right now. A page waits for its subresources, so a few hosts that never
+answer are enough to make a fast site feel like a 30-second one — a dead address costs the
+full OS connect timeout, about 21 seconds on Windows.
+
+Two knobs, both environment variables on the backend:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `WISP_CONNECT_TIMEOUT` | `5000` | Milliseconds to wait for a destination before giving up. Caps the ~21s the OS would otherwise take. |
+| `WISP_DNS` | unset | Comma-separated resolvers, e.g. `1.1.1.1,1.0.0.1`. Worth trying if a router or ISP resolver answers blocked ad domains with a dead address instead of NXDOMAIN. Leave unset if the network blocks outbound DNS. |
+
+`src/tcp.js` replaces wisp's socket with one that resolves every address for a host and takes
+whichever answers first, rather than committing to one address with no timeout and no second
+try. If wisp-js internals ever move, it logs a warning and falls back to the stock socket.
+
+If nothing is failing and pages are still slow, the transport is the next suspect: libcurl
+opens a fresh connection per request. Switch it to epoxy in the settings panel and compare.
+
 ## Sharing
 
 `DEFAULT_WISP` in `public/app.js` is the backend everyone gets out of the box, so people you

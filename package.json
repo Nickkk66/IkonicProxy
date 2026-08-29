@@ -6,7 +6,8 @@
   "scripts": {
     "setup": "node scripts/setup.js",
     "start": "node src/server.js",
-    "assets": "node scripts/copy-assets.js"
+    "assets": "node scripts/copy-assets.js",
+    "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {
     "@mercuryworkshop/bare-mux": "^2.1.9",

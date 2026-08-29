@@ -12,6 +12,7 @@ import { join, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { server as wisp, logging } from "@mercuryworkshop/wisp-js/server";
 import { ensureToken } from "./token.js";
+import { loadTCPSocket, CONNECT_TIMEOUT } from "./tcp.js";
 
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
 const APP_JS = fileURLToPath(new URL("../public/app.js", import.meta.url));
@@ -20,10 +21,28 @@ const PORT = parseInt(process.env.PORT || "8080", 10);
 const { token: WISP_TOKEN, created: TOKEN_IS_NEW } = ensureToken();
 
 logging.set_level(logging.WARN);
+// WISP_DNS=1.1.1.1,1.0.0.1 sends lookups to those servers instead of the
+// system resolver. Worth trying if pages stall: a router or ISP resolver that
+// answers blocked ad domains with an unroutable address (rather than NXDOMAIN)
+// makes every such subresource hang until the connect times out. Off by
+// default, because a network that blocks outbound DNS would break entirely.
+const dnsServers = (process.env.WISP_DNS || "").split(",").map((s) => s.trim()).filter(Boolean);
+
 Object.assign(wisp.options, {
   allow_udp_streams: false,
-  dns_servers: ["1.1.1.1", "1.0.0.1"],
+  // Note: dns_servers is only read when dns_method is "resolve". Setting it
+  // alongside the default "lookup" does nothing, which is how it used to be.
+  ...(dnsServers.length ? { dns_method: "resolve", dns_servers: dnsServers } : {}),
+  // Prefer A records: an AAAA on a machine with no working IPv6 route is a
+  // guaranteed connect timeout with nothing to fall back to.
+  dns_result_order: "ipv4first",
 });
+
+// Replaces the stock socket with one that gives up on a dead address in
+// CONNECT_TIMEOUT rather than the OS default, and tries every address for a
+// host instead of only the first. Null if the library's internals moved, in
+// which case wisp uses its own and everything still works.
+const TCPSocket = await loadTCPSocket(logging);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -104,7 +123,7 @@ server.on("upgrade", (req, socket, head) => {
   // wants a trailing slash. Hand it the plain prefix so the token stays out
   // of proxy.log.
   req.url = "/wisp/";
-  wisp.routeRequest(req, socket, head);
+  wisp.routeRequest(req, socket, head, TCPSocket ? { TCPSocket } : {});
 });
 
 server.listen(PORT, "0.0.0.0", () => {
