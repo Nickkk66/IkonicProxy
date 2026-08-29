@@ -23,6 +23,22 @@ const NET_MJS = new URL("../node_modules/@mercuryworkshop/wisp-js/src/server/net
 
 export const CONNECT_TIMEOUT = parseInt(process.env.WISP_CONNECT_TIMEOUT || "5000", 10);
 
+// A page pulls the same blocked ad host a dozen times. Once one attempt has
+// established that nothing is listening, the rest should not each spend
+// CONNECT_TIMEOUT rediscovering it -- so a failure is remembered briefly and
+// replayed instantly. Short, because a host that is merely down should be
+// retried soon rather than written off for the session.
+const NEGATIVE_TTL = parseInt(process.env.WISP_FAIL_TTL || "30000", 10);
+const recentFailures = new Map();
+
+function recentlyFailed(key) {
+  const until = recentFailures.get(key);
+  if (until === undefined) return false;
+  if (Date.now() < until) return true;
+  recentFailures.delete(key);
+  return false;
+}
+
 /**
  * Every address for a host. Follows whichever resolver wisp itself is
  * configured to use, so the address this connects to is one the hostname
@@ -63,8 +79,9 @@ function raceConnect(addresses, port, timeout) {
       winner ? resolve(winner) : reject(error);
     };
 
+    const tried = addresses.join(", ");
     const timer = setTimeout(
-      () => finish(null, new Error(`no address for :${port} answered within ${timeout}ms`)),
+      () => finish(null, new Error(`nothing answered on :${port} within ${timeout}ms (tried ${tried})`)),
       timeout,
     );
 
@@ -75,7 +92,7 @@ function raceConnect(addresses, port, timeout) {
       socket.once("error", () => {
         // Only give up early once every candidate has failed; otherwise a fast
         // refusal on one address would cancel a slower address still dialling.
-        if (++failures === addresses.length) finish(null, new Error(`no address for :${port} accepted a connection`));
+        if (++failures === addresses.length) finish(null, new Error(`no address accepted :${port} (tried ${tried})`));
       });
     }
   });
@@ -98,8 +115,18 @@ export async function loadTCPSocket(logging) {
   return class TimeoutTCPSocket extends NodeTCPSocket {
     async connect() {
       const started = Date.now();
+      const key = `${this.hostname}:${this.port}`;
+      if (recentlyFailed(key)) throw new Error(`${key} failed moments ago, not retrying yet`);
+
       const addresses = await addressesFor(this.hostname);
-      const socket = await raceConnect(addresses, this.port, CONNECT_TIMEOUT);
+      let socket;
+      try {
+        socket = await raceConnect(addresses, this.port, CONNECT_TIMEOUT);
+      } catch (err) {
+        recentFailures.set(key, Date.now() + NEGATIVE_TTL);
+        throw err;
+      }
+      recentFailures.delete(key);
 
       const elapsed = Date.now() - started;
       if (elapsed > 1000) logging?.warn?.(`slow connect: ${this.hostname}:${this.port} took ${elapsed}ms`);
