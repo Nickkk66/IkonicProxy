@@ -8,7 +8,20 @@ const BASE = new URL(".", location.href).pathname;
 // Default wisp backend, so people you share this with don't have to configure
 // anything. Quick tunnels rotate their hostname on every cloudflared restart --
 // `npm run setup` can rewrite this line for you.
-const DEFAULT_WISP = "wss://outlet-fleece-onion-compromise.trycloudflare.com/wisp/";
+const DEFAULT_WISP = "wss://think-achievement-brochure-readings.trycloudflare.com/wisp/";
+
+// Shared secret for the wisp socket, carried as the last path segment:
+// /wisp/<token>/. The backend refuses the upgrade without it, which is what
+// stops the tunnel address from being an open relay through the home PC.
+//
+// Deliberately empty here: this file is committed to a public repo, so the
+// token is substituted on the way to the browser instead -- by src/server.js
+// when it serves this file, and by the Pages workflow from a repository
+// secret. Editing it by hand works, but commits the credential.
+//
+// It still ends up readable by anyone who loads the site. It gates people who
+// turn up the tunnel hostname on its own; it is not per-user authentication.
+const WISP_TOKEN = "";
 
 // SHA-256 of the settings password. Hashed rather than stored literally so the
 // password itself isn't sitting in a public repo. NOTE: this is a client-side
@@ -76,9 +89,21 @@ function defaultWisp() {
   // it -- in both cases the whole app (frontend + wisp) is one origin, so the
   // backend is same-origin and does not depend on any hardcoded address.
   if (["localhost", "127.0.0.1"].includes(host) || host.endsWith(".trycloudflare.com")) {
-    return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/wisp/";
+    return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + wispPath();
   }
-  return DEFAULT_WISP;
+  // DEFAULT_WISP is stored without the secret, for the same reason WISP_TOKEN
+  // is empty above -- it is a committed file.
+  return withToken(DEFAULT_WISP);
+}
+
+/** The backend's socket path, with the shared secret when one is configured. */
+function wispPath() {
+  return WISP_TOKEN ? `/wisp/${WISP_TOKEN}/` : "/wisp/";
+}
+
+/** Swaps a bare .../wisp/ tail for the token-carrying one. */
+function withToken(url) {
+  return WISP_TOKEN ? url.replace(/\/wisp\/?$/, wispPath()) : url;
 }
 
 function getWispUrl() {
@@ -196,11 +221,14 @@ function normalizeWisp(raw) {
     return null;
   }
 
-  // wisp is served at /wisp/ -- add it if only the origin was pasted.
-  if (u.pathname === "" || u.pathname === "/") u.pathname = "/wisp/";
+  // wisp is served at /wisp/<token>/ -- add it if only the origin was pasted.
+  if (u.pathname === "" || u.pathname === "/") u.pathname = wispPath();
   if (!u.pathname.endsWith("/")) u.pathname += "/";
 
-  return u.toString();
+  // cloudflared prints a bare origin and the README says ".../wisp/", so a
+  // pasted address usually arrives without the secret. Fill it in; anything
+  // that already carries a token is left alone.
+  return withToken(u.toString());
 }
 
 // --- backend beacon --------------------------------------------------------
@@ -595,18 +623,24 @@ function ensureFrame(engine) {
     const src = frame.frame.src || "";
     if (src && !/about:blank$/.test(src)) commitFirstOpen();
 
-    // The very first request often lands before the wisp transport has finished
-    // connecting, so the proxy hands back the error page and it only works on a
-    // manual retry. Detect that page and retry once automatically.
+    // The first requests often land before the wisp transport has connected, so
+    // the proxy hands back the error page. Retry a few times behind the spinner
+    // (which covers the error page) so it works without the user doing anything.
+    let isErrorPage = false;
     try {
-      const doc = frame.frame.contentDocument;
-      if (doc && doc.body && doc.body.hasAttribute("data-ikonic-error") && !frame._retried && lastRequestedUrl) {
-        frame._retried = true;
-        setLoading(true);
-        setTimeout(() => frame.go(lastRequestedUrl), 500);
+      const b = frame.frame.contentDocument && frame.frame.contentDocument.body;
+      isErrorPage = !!(b && b.hasAttribute("data-ikonic-error"));
+    } catch {}
+    if (isErrorPage && lastRequestedUrl) {
+      frame._retries = frame._retries || 0;
+      if (frame._retries < 5) {
+        frame._retries++;
+        setLoading(true); // spinner sits over the error page during the retry
+        setTimeout(() => frame.go(lastRequestedUrl), 600);
         return;
       }
-    } catch {}
+      // Retries exhausted -- let the error page show.
+    }
 
     setLoading(false);
     try {
@@ -650,6 +684,14 @@ function ensureUltraviolet() {
   return ultravioletReady;
 }
 
+// A tiny request through the transport to force the wisp WebSocket open ahead
+// of the first real navigation. Fire-and-forget; failure is harmless.
+function warmConnection() {
+  try {
+    connection.fetch("https://www.google.com/generate_204", { method: "GET" }).catch(() => {});
+  } catch {}
+}
+
 function ensureConnected() {
   if (!connecting) {
     connecting = (async () => {
@@ -658,6 +700,7 @@ function ensureConnected() {
       await (getTransport() === "epoxy"
         ? connection.setTransport(BASE + "m/t2/index.mjs", [{ wisp }])
         : connection.setTransport(BASE + "m/t1/index.mjs", [{ websocket: wisp }]));
+      warmConnection();
     })();
     // A failed attempt must not be remembered, or fixing the backend address
     // in settings would never be retried.
@@ -731,7 +774,7 @@ async function openUrl(url, sourceEl) {
     if (want === "uv") await ensureUltraviolet();
     lastRequestedUrl = url;
     const frame = ensureFrame(want);
-    frame._retried = false; // a fresh navigation gets its own one-shot retry
+    frame._retries = 0; // a fresh navigation gets its own retry budget
     frame.go(url);
     if (!showing) firstOpenTimer = setTimeout(commitFirstOpen, 15000);
   } catch (err) {
@@ -840,6 +883,16 @@ bookmarkBtn.addEventListener("click", () => {
 });
 
 closeBtn.addEventListener("click", exitBrowser);
+
+// The error page's "Try again" posts here so the retry runs through the browser
+// view -- spinner up, no blank screen.
+addEventListener("message", (event) => {
+  if (event.data && event.data.ikonic === "retry" && activeFrame && lastRequestedUrl) {
+    setLoading(true);
+    activeFrame._retries = 0;
+    activeFrame.go(lastRequestedUrl);
+  }
+});
 
 fullscreenBtn.addEventListener("click", () => {
   if (document.fullscreenElement) document.exitFullscreen();
@@ -1202,7 +1255,9 @@ address.focus();
 // spinning, which reads as the app being slow rather than quietly getting ready.
 addEventListener("load", () => {
   const warm = () => {
-    ensureConnected().catch(() => {});
+    ensureConnected()
+      .then(() => warmConnection())
+      .catch(() => {});
   };
   if (window.requestIdleCallback) requestIdleCallback(warm, { timeout: 4000 });
   else setTimeout(warm, 1500);

@@ -94,7 +94,11 @@ function errorPage(originalHtml, host) {
       <button type="button" id="retry">Try again</button>
     </div>
     <script>
-      document.getElementById("retry").addEventListener("click", () => location.reload());
+      document.getElementById("retry").addEventListener("click", () => {
+        // Let the app re-navigate (spinner, no blank reload); reload as fallback.
+        try { parent.postMessage({ ikonic: "retry" }, "*"); } catch (e) {}
+        setTimeout(() => location.reload(), 500);
+      });
 
       // Type the pass phrase anywhere on this page to bring back the full
       // technical report, stack trace and all.

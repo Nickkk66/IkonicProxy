@@ -6,13 +6,18 @@
 //      actually opens sockets to target sites, and the only part that MUST
 //      run on your machine once the frontend lives on GitHub Pages.
 import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { server as wisp, logging } from "@mercuryworkshop/wisp-js/server";
+import { ensureToken } from "./token.js";
 
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
+const APP_JS = fileURLToPath(new URL("../public/app.js", import.meta.url));
+const TOKEN_LINE = /const WISP_TOKEN = "[^"]*";/;
 const PORT = parseInt(process.env.PORT || "8080", 10);
+const { token: WISP_TOKEN, created: TOKEN_IS_NEW } = ensureToken();
 
 logging.set_level(logging.WARN);
 Object.assign(wisp.options, {
@@ -52,7 +57,14 @@ const server = createServer(async (req, res) => {
   }
 
   try {
-    const body = await readFile(full);
+    let body = await readFile(full);
+    // app.js is committed to a public repo, so it ships with an empty
+    // WISP_TOKEN and is given the real one here, on the way out. GitHub Pages
+    // does the same from a repository secret -- see the Pages workflow. Either
+    // way the token reaches the browser without ever entering git.
+    if (full === APP_JS) {
+      body = body.toString("utf8").replace(TOKEN_LINE, `const WISP_TOKEN = "${WISP_TOKEN}";`);
+    }
     res.writeHead(200, {
       "Content-Type": MIME[extname(full).toLowerCase()] || "application/octet-stream",
       // Service workers must be allowed to control the whole path.
@@ -64,15 +76,43 @@ const server = createServer(async (req, res) => {
   }
 });
 
+/** Constant-time string compare, so the token cannot be guessed a byte at a time. */
+function tokenMatches(given) {
+  const a = Buffer.from(given, "utf8");
+  const b = Buffer.from(WISP_TOKEN, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 server.on("upgrade", (req, socket, head) => {
-  if (req.url.startsWith("/wisp/")) {
-    wisp.routeRequest(req, socket, head);
-  } else {
-    socket.end();
+  // The socket is the part that opens connections to target sites, so it is
+  // the part that has to be gated: /wisp/<token>/ and nothing else. Anything
+  // shorter is refused, including the bare /wisp/ that used to work.
+  let path;
+  try {
+    path = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  } catch {
+    path = "";
   }
+
+  const offered = /^\/wisp\/([^/]+)\/?$/.exec(path);
+  if (!offered || !tokenMatches(offered[1])) {
+    socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+    return;
+  }
+
+  // wisp-js labels the connection with the request path and logs it, and it
+  // wants a trailing slash. Hand it the plain prefix so the token stays out
+  // of proxy.log.
+  req.url = "/wisp/";
+  wisp.routeRequest(req, socket, head);
 });
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`frontend  http://localhost:${PORT}`);
-  console.log(`wisp      ws://localhost:${PORT}/wisp/`);
+  console.log(`wisp      ws://localhost:${PORT}/wisp/${WISP_TOKEN}/`);
+  if (TOKEN_IS_NEW) {
+    console.log("\nA backend token was generated and saved to .wisp-token.");
+    console.log("The address above is now a credential -- treat it like a password.");
+    console.log("Pages deploys need it as the WISP_TOKEN repository secret; pages.yml has the details.");
+  }
 });

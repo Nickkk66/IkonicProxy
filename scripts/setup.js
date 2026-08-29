@@ -15,6 +15,7 @@ import { createConnection } from "node:net";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { ensureToken } from "../src/token.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const PID_FILE = root + ".proxy.pid";
@@ -104,6 +105,37 @@ function checkFrontend() {
     label: "Frontend files (public/)",
     state: gone.length ? "bad" : "ok",
     detail: gone.length ? `missing: ${gone.join(", ")} -- restore them from git` : "",
+  };
+}
+
+// The backend refuses any socket that does not carry the token, so the Pages
+// build needs it as a repository secret -- otherwise the deployed site loads
+// and then reports nothing but "backend unreachable". Nothing here can read
+// GitHub's secrets, so this reports the token and says what to do with it.
+function checkToken() {
+  const { token, created } = ensureToken();
+
+  // A committed token would be public along with the repo, which is the whole
+  // thing this is meant to prevent.
+  let committed = false;
+  try {
+    committed = /const WISP_TOKEN = "\S+";/.test(readFileSync(APP_JS, "utf8"));
+  } catch {}
+  if (committed) {
+    // Warn rather than block: the proxy still runs, it is the secrecy that broke.
+    return {
+      label: "Backend token (.wisp-token)",
+      state: "warn",
+      detail: "public/app.js has a token written into it -- clear it, the repo is public",
+    };
+  }
+
+  return {
+    label: "Backend token (.wisp-token)",
+    state: created ? "warn" : "ok",
+    detail: created
+      ? `generated just now: ${token} -- set it as the WISP_TOKEN repository secret for Pages`
+      : "served locally, injected on Pages from the WISP_TOKEN secret",
   };
 }
 
@@ -230,7 +262,9 @@ async function startProxy() {
     if (await portBusy()) {
       console.log(`\nProxy running (pid ${child.pid})`);
       console.log(`  frontend  http://localhost:${PORT}`);
-      console.log(`  wisp      ws://localhost:${PORT}/wisp/`);
+      // The socket only answers on the token path -- printing the bare one
+      // would send anyone debugging straight into a 401.
+      console.log(`  wisp      ws://localhost:${PORT}/wisp/${ensureToken().token}/`);
       console.log(`  log       ${LOG_FILE}`);
       console.log(`\nTo let the Pages site reach it:  cloudflared tunnel --url http://localhost:${PORT}`);
       return;
@@ -356,6 +390,10 @@ function wispFrom(url) {
 /**
  * Points DEFAULT_WISP in public/app.js at this tunnel, so the deployed site
  * uses it without anyone having to touch Backend settings.
+ *
+ * The address stays tokenless on purpose: this file is committed to a public
+ * repo, and the backend token is substituted at serve time instead (locally by
+ * src/server.js, on Pages from the WISP_TOKEN repository secret).
  */
 function useTunnelAsDefault(url) {
   const wisp = wispFrom(url);
@@ -410,7 +448,7 @@ function report(checks) {
 }
 
 async function runChecks(rl) {
-  let checks = [checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkCloudflared()];
+  let checks = [checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkToken(), checkCloudflared()];
   report(checks);
 
   // Anything with a fix gets offered; the rest is reported and left alone.
@@ -423,7 +461,7 @@ async function runChecks(rl) {
   }
 
   // Re-run so the summary reflects whatever the fixes changed.
-  checks = [checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkCloudflared()];
+  checks = [checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkToken(), checkCloudflared()];
   const blocking = checks.filter((c) => c.state === "bad");
   if (blocking.length) {
     console.log("\n" + line());
@@ -502,13 +540,13 @@ if (COMMANDS.includes(arg)) {
     console.log(`proxy   ${proxy.kind === "ours" ? `running (pid ${proxy.pid})` : proxy.kind}`);
     console.log(`tunnel  ${tunnel.running ? tunnel.url || `running (pid ${tunnel.pid})` : "stopped"}`);
   } else {
-    report([checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkCloudflared()]);
+    report([checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkToken(), checkCloudflared()]);
     const bad = [checkNode(), checkDeps(), checkAssets(), checkFrontend()].some((c) => c.state === "bad");
     process.exitCode = bad ? 1 : 0;
   }
 } else if (!process.stdin.isTTY) {
   // No console to prompt in -- report and stop rather than hanging on input.
-  report([checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkCloudflared()]);
+  report([checkNode(), checkDeps(), checkAssets(), checkFrontend(), checkToken(), checkCloudflared()]);
   const proxy = await proxyStatus();
   const tunnel = tunnelStatus();
   console.log(`\nProxy:  ${proxy.kind === "ours" ? `running (pid ${proxy.pid})` : proxy.kind}`);

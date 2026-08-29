@@ -5,3 +5,4 @@ package-lock.json
 .proxy.pid
 .tunnel.pid
 .tunnel.url
+.wisp-token

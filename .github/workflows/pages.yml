@@ -23,6 +23,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+
+      # The wisp backend refuses any socket that does not carry the shared
+      # token, so the deployed site needs it -- but this repo is public, so it
+      # cannot be committed. It is injected here from the WISP_TOKEN repository
+      # secret (Settings -> Secrets and variables -> Actions), which must match
+      # the .wisp-token file on the machine running the backend.
+      #
+      # Without the secret the site still deploys and still loads; it just
+      # reports "backend unreachable" until the secret is set.
+      - name: Inject the backend token
+        env:
+          WISP_TOKEN: ${{ secrets.WISP_TOKEN }}
+        run: |
+          if [ -z "$WISP_TOKEN" ]; then
+            echo "::warning::WISP_TOKEN is not set -- the deployed site will not be able to open the backend socket."
+            exit 0
+          fi
+          node -e '
+            const fs = require("fs");
+            const file = "public/app.js";
+            const line = /const WISP_TOKEN = "[^"]*";/;
+            const source = fs.readFileSync(file, "utf8");
+            if (!line.test(source)) {
+              console.error("::error::WISP_TOKEN declaration not found in " + file);
+              process.exit(1);
+            }
+            fs.writeFileSync(file, source.replace(line, `const WISP_TOKEN = ${JSON.stringify(process.env.WISP_TOKEN)};`));
+          '
+          echo "Injected the backend token into public/app.js."
+
       # public/ already contains the vendored scramjet assets, so there is
       # nothing to build -- upload it as-is.
       - uses: actions/upload-pages-artifact@v3

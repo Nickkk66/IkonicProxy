@@ -65,11 +65,38 @@ cloudflared tunnel --url http://localhost:8080
 ```
 
 Either way you get a free `https://<random>.trycloudflare.com` URL. Paste it straight into
-**Backend settings** on the site -- `https://` is converted to `wss://` and `/wisp/` is
-appended automatically.
+**Backend settings** on the site -- `https://` is converted to `wss://`, and `/wisp/` plus the
+backend token (below) are appended automatically.
 
 Quick tunnels get a new random hostname on every restart. For a stable address, log in with
 `cloudflared tunnel login` and create a named tunnel bound to a domain.
+
+## The backend token
+
+The wisp socket is the part that actually opens connections to target sites, so it is gated by
+a shared secret: the backend accepts `/wisp/<token>/` and refuses everything else with a 401.
+Without it the tunnel address is an open relay — anyone who turns up the hostname can route
+traffic through this machine, under this IP.
+
+`npm start` generates the token on first run and saves it to `.wisp-token` (gitignored; set
+`WISP_TOKEN` in the environment to override it). The frontend needs it too, and gets it without
+it ever entering git:
+
+- **Locally**, `src/server.js` substitutes it into `app.js` as it serves the file.
+- **On Pages**, the deploy workflow substitutes it from the `WISP_TOKEN` repository secret
+  (*Settings → Secrets and variables → Actions*). Set that secret to the contents of
+  `.wisp-token`, or the deployed site loads and then reports `backend unreachable`.
+
+`WISP_TOKEN` in `public/app.js` therefore stays empty in the repo. Writing it in by hand works,
+but commits the credential to a public repo, which is the thing this is meant to avoid.
+
+Rotating it is deleting `.wisp-token`, restarting the backend, and updating the secret.
+
+**What this does and does not buy.** It closes the case where someone finds the tunnel hostname
+on its own — scanning, a leaked `Referer`, certificate transparency — which is the realistic
+way an open relay gets discovered and abused. It does not hide the token from anyone who loads
+the site: the page is static and public, so the token is readable in devtools like everything
+else here. Real per-user authentication needs a server-side gate, not a static frontend.
 
 ## Sharing
 
