@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const TOKEN_FILE = fileURLToPath(new URL("../.wisp-token", import.meta.url));
+export const TOKEN_FILE = fileURLToPath(new URL("../.wisp-token", import.meta.url));
 
 /** The configured token, or null if there is not one yet. */
 export function readToken() {

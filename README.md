@@ -27,13 +27,44 @@ Tunnel: https://outlet-fleece-onion-compromise.trycloudflare.com
   1) Stop the proxy
   2) Stop the tunnel
   3) Use that address as the site default (edits public/app.js)
-  4) Close
+  4) Show the link and secret (copies the secret)
+  5) Change the backend secret
+  6) Close
 ```
 
 Each entry flips to its opposite depending on what is running, so option 1 reads **Start the
 proxy** when it is stopped. Option 3 only appears once a tunnel address is known; it rewrites
 `DEFAULT_WISP` in `public/app.js` for you, which still has to be committed and pushed before
 the Pages site uses it.
+
+Starting the proxy or the tunnel prints the same block option 4 does, and puts the secret on
+the clipboard ready to paste:
+
+```
+================================================================
+ Backend
+================================================================
+  Link (always current, rotates)
+    https://think-achievement-brochure-readings.trycloudflare.com
+
+  Link (stable, needs the address below to be pushed)
+    https://nickkk66.github.io/scramjet-selfhost/
+
+  Backend address
+    wss://think-achievement-brochure-readings.trycloudflare.com/wisp/<secret>/
+
+  Secret  (copied to clipboard)
+    <secret>
+```
+
+The first link is the tunnel itself, which serves the frontend as well as the socket — it is
+same-origin, so it always works and never needs `DEFAULT_WISP` or the repository secret to be
+current. The catch is that it changes every time the tunnel restarts. The second is the Pages
+site, which is stable but only reaches the backend once the address below it has been pushed.
+
+Option 5 rotates the secret: it mints a new one, restarts the proxy so it takes effect, and
+prints the `gh secret set` line to run afterwards. Everyone on the old link is cut off
+immediately, including the deployed site until the repository secret is updated.
 
 Both the proxy and the tunnel are started detached — output in `proxy.log` and `tunnel.log`,
 pids in `.proxy.pid` and `.tunnel.pid` — so closing the menu leaves them running.
@@ -46,6 +77,7 @@ node scripts/setup.js status         # proxy and tunnel
 node scripts/setup.js stop
 node scripts/setup.js tunnel         # prints the trycloudflare address
 node scripts/setup.js tunnel-stop
+node scripts/setup.js backend        # link, address and secret; copies the secret
 ```
 
 ## Local development
@@ -90,7 +122,9 @@ it ever entering git:
 `WISP_TOKEN` in `public/app.js` therefore stays empty in the repo. Writing it in by hand works,
 but commits the credential to a public repo, which is the thing this is meant to avoid.
 
-Rotating it is deleting `.wisp-token`, restarting the backend, and updating the secret.
+To rotate it, use **Change the backend secret** in `npm run setup` — it mints a new one,
+restarts the backend, and prints the `gh secret set` line to run afterwards. By hand it is
+the same three steps: delete `.wisp-token`, restart the backend, update the secret.
 
 **What this does and does not buy.** It closes the case where someone finds the tunnel hostname
 on its own — scanning, a leaked `Referer`, certificate transparency — which is the realistic

@@ -15,7 +15,7 @@ import { createConnection } from "node:net";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ensureToken } from "../src/token.js";
+import { ensureToken, TOKEN_FILE } from "../src/token.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const PID_FILE = root + ".proxy.pid";
@@ -235,10 +235,13 @@ async function killPid(pid) {
   return !isAlive(pid);
 }
 
-async function startProxy() {
+// details:false during a rotation, where the caller prints the block itself
+// once everything has settled.
+async function startProxy({ details = true } = {}) {
   const status = await proxyStatus();
   if (status.kind === "ours") {
     console.log(`\nAlready running (pid ${status.pid}).`);
+    if (details) printBackend({ copy: true });
     return;
   }
   if (status.kind === "foreign") {
@@ -262,11 +265,11 @@ async function startProxy() {
     if (await portBusy()) {
       console.log(`\nProxy running (pid ${child.pid})`);
       console.log(`  frontend  http://localhost:${PORT}`);
-      // The socket only answers on the token path -- printing the bare one
-      // would send anyone debugging straight into a 401.
-      console.log(`  wisp      ws://localhost:${PORT}/wisp/${ensureToken().token}/`);
       console.log(`  log       ${LOG_FILE}`);
-      console.log(`\nTo let the Pages site reach it:  cloudflared tunnel --url http://localhost:${PORT}`);
+      if ((await proxyStatus()).kind === "ours" && !tunnelStatus().running) {
+        console.log(`\nTo let the Pages site reach it:  cloudflared tunnel --url http://localhost:${PORT}`);
+      }
+      if (details) printBackend({ copy: true });
       return;
     }
     if (!isAlive(child.pid)) break;
@@ -355,10 +358,8 @@ async function startTunnel() {
       const url = match[0];
       writeFileSync(TUNNEL_URL_FILE, url);
       console.log(`\n\nTunnel up (pid ${child.pid})`);
-      console.log(`  ${url}`);
-      console.log(`\nPaste that into Backend settings on the site -- it is converted to`);
-      console.log(`  ${wispFrom(url)}`);
-      console.log("\nIt is a fresh random address every time the tunnel restarts.");
+      console.log("It is a fresh random address every time the tunnel restarts.");
+      printBackend({ copy: true });
       return;
     }
     if (!isAlive(child.pid)) break;
@@ -414,6 +415,100 @@ function useTunnelAsDefault(url) {
   console.log(`\npublic/app.js now defaults to:\n  ${wisp}`);
   console.log("\nCommit and push for the Pages site to pick it up:");
   console.log('  git commit -am "Point at the current tunnel" && git push');
+}
+
+// --- backend details -------------------------------------------------------
+
+/** owner/repo from the git remote, for the Pages link and the gh command. */
+function repoSlug() {
+  const res = spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: root, encoding: "utf8" });
+  const match = /github\.com[:/]([^/]+)\/(.+?)(?:\.git)?\s*$/.exec(res.stdout || "");
+  return match ? { owner: match[1], repo: match[2] } : null;
+}
+
+/** https://<owner>.github.io/<repo>/ -- where the deployed frontend lives. */
+function pagesLink() {
+  const slug = repoSlug();
+  if (!slug) return null;
+  const owner = slug.owner.toLowerCase();
+  // A repo literally named <owner>.github.io is served from the domain root.
+  return slug.repo.toLowerCase() === `${owner}.github.io`
+    ? `https://${owner}.github.io/`
+    : `https://${owner}.github.io/${slug.repo}/`;
+}
+
+/** Puts text on the clipboard. Best effort -- reports whether it landed. */
+function copyToClipboard(text) {
+  const [cmd, args] = WIN ? ["clip", []] : process.platform === "darwin" ? ["pbcopy", []] : ["xclip", ["-selection", "clipboard"]];
+  try {
+    return spawnSync(cmd, args, { input: text }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Everything needed to actually use the backend, in one block: where to send
+ * people, what address the site talks to, and the secret that address carries.
+ * Printed after starting things, and on demand from the menu.
+ */
+function printBackend({ copy = false } = {}) {
+  const { token } = ensureToken();
+  const tunnel = tunnelStatus();
+  const pages = pagesLink();
+  const slug = repoSlug();
+
+  console.log("\n" + line("="));
+  console.log(" Backend");
+  console.log(line("="));
+
+  if (tunnel.url) {
+    // Same origin as the wisp socket, so it needs no DEFAULT_WISP and cannot
+    // go stale -- but the hostname changes every time the tunnel restarts.
+    console.log("  Link (always current, rotates)");
+    console.log(`    ${tunnel.url}`);
+  }
+  if (pages) {
+    console.log(`${tunnel.url ? "\n" : ""}  Link (stable, needs the address below to be pushed)`);
+    console.log(`    ${pages}`);
+  }
+
+  console.log("\n  Backend address");
+  console.log(`    ${tunnel.url ? wispFrom(tunnel.url) + token + "/" : `ws://localhost:${PORT}/wisp/${token}/`}`);
+
+  const copied = copy && copyToClipboard(token);
+  console.log("\n  Secret" + (copied ? "  (copied to clipboard)" : ""));
+  console.log(`    ${token}`);
+
+  console.log("\n  It lives in .wisp-token. The Pages build needs the same value as the");
+  console.log("  WISP_TOKEN repository secret, or the deployed site cannot reach the backend:");
+  console.log(`    gh secret set WISP_TOKEN${slug ? ` --repo ${slug.owner}/${slug.repo}` : ""} --body "${token}"`);
+  console.log(line());
+}
+
+/**
+ * Rotates the secret: old links stop working immediately, which is the point.
+ * Only the local half can be automated -- the repository secret is GitHub's.
+ */
+async function rotateToken(rl) {
+  const answer = await ask(rl, "\nThis cuts off everyone using the current link. Continue? [y/N] ");
+  if (answer === null || !/^y/i.test(answer.trim())) {
+    console.log("\nLeft alone.");
+    return;
+  }
+
+  remove(TOKEN_FILE);
+  const { token } = ensureToken();
+  console.log(`\nNew secret: ${token}`);
+
+  // The running backend still holds the old one in memory.
+  if ((await proxyStatus()).kind === "ours") {
+    console.log("\nRestarting the proxy so it picks the new one up.");
+    await stopProxy();
+    await startProxy({ details: false });
+  }
+  printBackend({ copy: true });
+  console.log("\nSet that as the repository secret, then push, or the deployed site stays cut off.");
 }
 
 // --- menu ------------------------------------------------------------------
@@ -504,6 +599,11 @@ async function menu(rl, ready) {
         run: async () => useTunnelAsDefault(tunnel.url),
       });
     }
+    options.push({
+      label: "Show the link and secret (copies the secret)",
+      run: async () => printBackend({ copy: true }),
+    });
+    options.push({ label: "Change the backend secret", run: async () => rotateToken(rl) });
     options.push({ label: "Close", close: true });
 
     options.forEach((option, i) => console.log(`  ${i + 1}) ${option.label}`));
@@ -526,7 +626,7 @@ async function menu(rl, ready) {
 // --- entry -----------------------------------------------------------------
 
 const arg = (process.argv[2] || "").replace(/^--/, "");
-const COMMANDS = ["start", "stop", "status", "check", "tunnel", "tunnel-stop"];
+const COMMANDS = ["start", "stop", "status", "check", "tunnel", "tunnel-stop", "backend"];
 
 if (COMMANDS.includes(arg)) {
   // Non-interactive forms, useful from other scripts or a shortcut.
@@ -534,6 +634,7 @@ if (COMMANDS.includes(arg)) {
   else if (arg === "stop") await stopProxy();
   else if (arg === "tunnel") await startTunnel();
   else if (arg === "tunnel-stop") await stopTunnel();
+  else if (arg === "backend") printBackend({ copy: true });
   else if (arg === "status") {
     const proxy = await proxyStatus();
     const tunnel = tunnelStatus();
