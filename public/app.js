@@ -85,10 +85,12 @@ const bookmarkList = document.getElementById("bookmarklist");
  */
 function defaultWisp() {
   const host = location.hostname;
-  // Served by the local server directly, or by a Cloudflare tunnel pointing at
-  // it -- in both cases the whole app (frontend + wisp) is one origin, so the
-  // backend is same-origin and does not depend on any hardcoded address.
-  if (["localhost", "127.0.0.1"].includes(host) || host.endsWith(".trycloudflare.com")) {
+  // Unless this page came from GitHub Pages, whatever served it is the backend
+  // itself -- the local server, or any tunnel pointing at it (Cloudflare,
+  // ngrok, Tailscale Funnel, dev tunnels...). Frontend and wisp are then one
+  // origin, and no hardcoded address is involved. Only Pages serves the files
+  // without also running the backend, so only Pages needs DEFAULT_WISP.
+  if (!/.github.io$/i.test(host)) {
     return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + wispPath();
   }
   // DEFAULT_WISP is stored without the secret, for the same reason WISP_TOKEN
