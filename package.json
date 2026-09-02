@@ -14,8 +14,11 @@
     "@mercuryworkshop/epoxy-transport": "^3.0.1",
     "@mercuryworkshop/libcurl-transport": "^1.5.2",
     "@mercuryworkshop/scramjet": "https://github.com/MercuryWorkshop/scramjet/releases/download/v1.1.0/mercuryworkshop-scramjet-1.1.0.tgz",
+    "@mercuryworkshop/scramjet-controller": "^0.0.14",
     "@mercuryworkshop/wisp-js": "^0.4.1",
     "@titaniumnetwork-dev/ultraviolet": "^3.2.10",
+    "libcurl2": "npm:@mercuryworkshop/libcurl-transport@^2.0.5",
+    "scramjet2": "npm:@mercuryworkshop/scramjet@^2.0.67-alpha.2",
     "ws": "^8.18.3"
   }
 }

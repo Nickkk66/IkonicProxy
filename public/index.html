@@ -7,6 +7,7 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1.5' y='1.5' width='21' height='21' rx='6' fill='%235b8cff'/%3E%3Crect x='8' y='11' width='8' height='6.6' rx='1.4' fill='%230c1020'/%3E%3Cpath d='M9.3 11V9.2a2.7 2.7 0 0 1 5.4 0V11' fill='none' stroke='%230c1020' stroke-width='1.6'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="style.css" />
     <!-- Relative, not root-absolute: Pages serves this from /<repo>/ -->
+    <script src="blocked.js"></script>
     <script src="m/e1/e1.js"></script>
     <script src="m/mx/index.js"></script>
     <script src="app.js" defer></script>
@@ -124,10 +125,11 @@
           <span id="beacontext">checking backend</span>
         </p>
 
-        <p class="hint">Engine. Smart uses Ultraviolet on chat sites (for uploads) and Scramjet everywhere else.</p>
+        <p class="hint">Engine. Smart uses Ultraviolet on chat sites (for uploads) and Scramjet 2 everywhere else.</p>
         <div class="row transport">
           <label><input type="radio" name="engine" value="auto" /> Smart</label>
-          <label><input type="radio" name="engine" value="scramjet" /> Scramjet</label>
+          <label><input type="radio" name="engine" value="scramjet2" /> Scramjet 2</label>
+          <label><input type="radio" name="engine" value="scramjet" /> Scramjet 1</label>
           <label><input type="radio" name="engine" value="uv" /> Ultraviolet</label>
         </div>
 

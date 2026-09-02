@@ -279,6 +279,44 @@ async function startProxy({ details = true } = {}) {
   console.log(`\nIt did not come up. Check ${LOG_FILE}.`);
 }
 
+/**
+ * The quick way up: the proxy on its own, and the browser pointed at it.
+ *
+ * Served from localhost the frontend talks to the backend on the same origin,
+ * so no tunnel, no Pages deploy and no address in app.js are involved -- it
+ * works the moment the process is listening. A tunnel can still be started
+ * afterwards from the menu if the address needs to be shared.
+ */
+async function startLocal() {
+  const status = await proxyStatus();
+  if (status.kind === "stopped") {
+    await startProxy({ details: false });
+    if ((await proxyStatus()).kind !== "ours") return;
+  } else if (status.kind === "foreign") {
+    console.log(`\nPort ${PORT} is already in use by another program. Close it first, or set PORT.`);
+    return;
+  }
+
+  const url = `http://localhost:${PORT}/`;
+  console.log(`\nLocal:  ${url}`);
+  console.log("Only this machine can reach that. To share it, start a tunnel from the menu.");
+  openInBrowser(url);
+}
+
+/** Hands a URL to the default browser; silently does nothing if that fails. */
+function openInBrowser(url) {
+  try {
+    // On Windows `start` is a cmd builtin, and an empty first argument is its
+    // window title -- without it the URL itself would be taken as the title.
+    const [cmd, args] = WIN
+      ? ["cmd", ["/c", "start", "", url]]
+      : process.platform === "darwin"
+        ? ["open", [url]]
+        : ["xdg-open", [url]];
+    spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  } catch {}
+}
+
 async function stopProxy() {
   const status = await proxyStatus();
   if (status.kind === "foreign") {
@@ -579,8 +617,17 @@ async function menu(rl, ready) {
     console.log(tunnel.running ? `Tunnel: ${tunnel.url || `pid ${tunnel.pid}, address not read yet`}` : "Tunnel: stopped");
     console.log(line());
 
-    // Built per pass so each entry reflects the state just printed.
+    // Built per pass so each entry reflects the state just printed. The local
+    // entry comes first because it is the one most people want most of the time.
     const options = [
+      {
+        label: running
+          ? `Open it locally (http://localhost:${PORT}, no tunnel needed)`
+          : `Start locally (proxy only, opens http://localhost:${PORT})`,
+        run: ready
+          ? startLocal
+          : async () => console.log("\nFix the items above first -- the proxy will not work as it stands."),
+      },
       running
         ? { label: "Stop the proxy", run: stopProxy }
         : {
@@ -626,11 +673,12 @@ async function menu(rl, ready) {
 // --- entry -----------------------------------------------------------------
 
 const arg = (process.argv[2] || "").replace(/^--/, "");
-const COMMANDS = ["start", "stop", "status", "check", "tunnel", "tunnel-stop", "backend"];
+const COMMANDS = ["start", "local", "stop", "status", "check", "tunnel", "tunnel-stop", "backend"];
 
 if (COMMANDS.includes(arg)) {
   // Non-interactive forms, useful from other scripts or a shortcut.
   if (arg === "start") await startProxy();
+  else if (arg === "local") await startLocal();
   else if (arg === "stop") await stopProxy();
   else if (arg === "tunnel") await startTunnel();
   else if (arg === "tunnel-stop") await stopTunnel();

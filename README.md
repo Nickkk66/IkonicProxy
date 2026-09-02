@@ -10,6 +10,52 @@ A self-hosted [Scramjet](https://github.com/MercuryWorkshop/scramjet) deployment
 GitHub Pages executes no server code, so the wisp backend **must** run on your machine and be
 reachable over `wss://`. Cloudflare Tunnel provides that for free without port forwarding.
 
+## How it works
+
+Nothing you browse ever leaves the browser as a plain request for the real site. Every
+hop below exists so that the only thing your network sees is one WebSocket to one address.
+
+```
+your browser
+  │  the page you asked for, e.g. youtube.com
+  ▼
+service worker (public/sw.js)  ─ rewrites the page so every link, script and fetch
+  │                               points back into the proxy instead of the real site
+  │                               (Scramjet 2 by default; Scramjet 1 and Ultraviolet
+  │                               are also there, picked from the settings panel)
+  ▼
+transport (libcurl / epoxy)    ─ a TLS client compiled to WebAssembly. The browser
+  │                               never opens a connection to the site itself; this
+  │                               does the TLS, inside the page, and speaks wisp
+  ▼
+one WebSocket ────────────────── wss://<address>/wisp/<secret>/
+  │
+  ▼  (Cloudflare Tunnel, when the frontend is on GitHub Pages)
+cloudflared on your PC ───────── a free trycloudflare.com address that forwards to
+  │                               localhost:8080, so nothing is port-forwarded
+  ▼
+wisp backend (src/server.js)  ─ Node, on your PC. Opens the real TCP socket to the
+  │                               site and shuttles bytes between it and the WebSocket
+  ▼
+the real site
+```
+
+**Wisp** is the protocol on that WebSocket. It is a small multiplexing scheme: many TCP
+streams (one per connection the page would have made) carried over one socket, each
+packet tagged with a stream id. The backend does no TLS and never sees page content --
+TLS is done end-to-end by the transport in the browser -- it only opens sockets to the
+hostnames it is told and copies bytes. That is why it can be so small, and why the
+secret in the path matters: whoever has the address can open sockets from your PC.
+
+Two ways to run it:
+
+- **Locally.** Frontend and backend both from `http://localhost:8080` on your own PC.
+  No tunnel, no deploy, nothing to configure -- `npm run setup` then **Start locally**.
+  Only that machine can reach it.
+- **Shared.** Frontend on GitHub Pages, backend on your PC behind a Cloudflare Tunnel.
+  Anyone with the Pages link uses your PC as their exit. Start a tunnel from the menu,
+  use its address as the site default, commit, push.
+
 ## Setup
 
 ```bash
@@ -24,16 +70,19 @@ Checks that everything needed is present — Node 18+, dependencies, the browser
 Proxy:  running on port 8080 (pid 22816)
 Tunnel: https://outlet-fleece-onion-compromise.trycloudflare.com
 
-  1) Stop the proxy
-  2) Stop the tunnel
-  3) Use that address as the site default (edits public/app.js)
-  4) Show the link and secret (copies the secret)
-  5) Change the backend secret
-  6) Close
+  1) Open it locally (http://localhost:8080, no tunnel needed)
+  2) Stop the proxy
+  3) Stop the tunnel
+  4) Use that address as the site default (edits public/app.js)
+  5) Show the link and secret (copies the secret)
+  6) Change the backend secret
+  7) Close
 ```
 
-Each entry flips to its opposite depending on what is running, so option 1 reads **Start the
-proxy** when it is stopped. Option 3 only appears once a tunnel address is known; it rewrites
+Option 1 is the quick way up: it starts the proxy if it is not running and opens
+`http://localhost:8080` in your browser -- no tunnel, nothing to configure. The other entries
+flip to their opposite depending on what is running, so option 2 reads **Start the proxy**
+when it is stopped. Option 4 only appears once a tunnel address is known; it rewrites
 `DEFAULT_WISP` in `public/app.js` for you, which still has to be committed and pushed before
 the Pages site uses it.
 
@@ -189,8 +238,16 @@ which carries the real page along inside the replacement.
   `SharedArrayBuffer` themselves may not fully work; everything else does.
 - All frontend paths are computed from the page's own directory, so the project site path
   (`/<repo>/`) works without a custom domain.
-- This pins Scramjet v1.1.0, matching the upstream reference app. v1 logs a notice recommending
-  v2; upgrading is a follow-up.
+- **Scramjet 2 is the engine Smart picks.** It is installed alongside v1 under an npm alias
+  rather than replacing it, so both are on disk and both are in the engine picker. v2 is still
+  published as an alpha, which is why v1 is kept: if a site breaks under v2, the picker has a
+  working fallback. v2 is what makes YouTube play -- see the note further down.
+- **`sourcemaps` is off for Scramjet 2.** Left on (its default) a YouTube watch page kills the
+  tab within about eight seconds -- Edge shows "This page is having a problem", error code
+  `STATUS_BREAKPOINT`. It is not memory: the renderer never grows past a few hundred MB before
+  it goes. Source maps are a debugging aid and building one for every script the engine
+  rewrites is expensive on a site that ships multi-megabyte bundles, so there is nothing to
+  miss by turning them off.
 - The start screen has a **Home / AI** segmented switch (top-centre, sliding indicator). **AI** opens **IkonAI** — Google Gemini embedded under an IkonAI header (labelled “Runs on Google Gemini”), always via Ultraviolet, preloaded in the background on load so it opens instantly.
 - **Panic** is now a hotkey, set via the settings cog (top-right of Home): press the bound key anywhere to redirect the whole tab to plain `google.com` and attempt to close it. The toolbar panic button was removed.
 - The toolbar address bar shows a **Go** button (external-link icon) once you type, for no-keyboard use. Both engines' failure pages (Scramjet and Ultraviolet) are masked by the same custom page; typing the pass phrase on it reveals the real diagnostics.
@@ -204,20 +261,64 @@ which carries the real page along inside the replacement.
   screen only flips to the browser once the page is in, so it does not blank out mid-click.
 - The launcher icons in `public/icons/` are each site's own favicon, downloaded once and
   committed. Nothing is fetched from a third-party icon service at runtime.
-- `public/sw.js` calls `skipWaiting()` and `clients.claim()`. Without them an edited worker
-  sits in “waiting” until every tab using the old one is closed, and changes to it look like
-  they simply did not happen.
+- `public/sw.js` calls `skipWaiting()` and `clients.claim()`, both held open with
+  `waitUntil()`. Without them an edited worker sits in “waiting” until every tab using the old
+  one is closed, and changes to it look like they simply did not happen. The `waitUntil` is not
+  decoration: `skipWaiting()` returns a promise, and calling it bare lets install finish first,
+  at which point the worker is already parked in “waiting” and the call has nothing left to
+  skip -- the exact failure the line is there to prevent.
+- **Adverts and trackers are refused outright**, listed in `public/blocked.js`. This is not a
+  taste decision, it is what makes several sites work at all. A proxied page's real URLs are
+  invisible to whatever ad blocker the browser has, so everything the blocker would normally
+  kill is actually attempted; and on a filtered connection these hosts do not refuse the
+  connection, they swallow it, so each one costs the full connect timeout. Worse, a site that
+  is waiting on an advert waits for the page too: higherlowergame's game-over screen never drew
+  after a wrong answer, and YouTube never asked for the video. Failing them instantly, the way
+  a blocker does, puts a site on the error path it already has. The list is loaded in three
+  places -- the page, the service worker, and the transport wrapper Scramjet 2 needs, since v2
+  fetches a page's subresources itself and the worker never sees most of them.
+- **View transitions are switched off inside proxied pages** (`guardCompositor()` in
+  `public/app.js`). This is what stops the tab dying on YouTube -- "This page is having a
+  problem", `STATUS_BREAKPOINT`. Every crash dump ends on the Compositor thread inside Edge's
+  `cc::draw_property_utils::CalculateDrawProperties`, and the checks page content can reach
+  there are the view-transition ones. YouTube runs a view transition when it goes from the
+  feed to a video; on the real site its embedded frames are cross-origin and get their own
+  compositor, but through the proxy every frame is one origin and they all share one, which
+  is where those checks trip. Taking `view-transition-name` off everything leaves the
+  transition nothing to capture. It is an official-build CHECK -- not memory, not an
+  exception -- so this is the only place it can be handled.
+- **The page pings the service worker every twenty seconds while a site is open.** An idle
+  worker is evicted after about half a minute, and the replacement knows none of Scramjet 2's
+  routing; its re-pairing fails ("All clients returned an invalid MessagePort") and every
+  request then falls through to the static host as a bare `404` -- a page that loads its
+  document and then nothing else. A worker that is never idle is never evicted.
+- **A failed subresource fails like the network does.** Only a whole page gets the failure
+  screen; anything else gets a real network error. Handing back a 500 carrying HTML in place of
+  a script or an image means the browser sees a response, so `fetch()` resolves, `onerror`
+  never fires, and the site's own fallback never runs.
 - Search defaults to DuckDuckGo. Google fingerprints proxied traffic and answers most searches
   through here with a reCAPTCHA “unusual traffic” page: every request arrives from one home IP
   with a rewritten browser fingerprint, which is exactly what its bot heuristics look for.
   DuckDuckGo does not care. Google still works if you type it in; expect challenges.
-- Two rewriters ship, both inside the one service worker and told apart by URL prefix:
-  **Scramjet** (`m/p1/`) and **Ultraviolet** (`m/p2/`). The engine picker has three settings and
-  defaults to **Smart**: Ultraviolet on the chat sites (its uploads work where Scramjet v1's
-  hang) and Scramjet everywhere else. The chat-site list is `AI_HOSTS` in `public/app.js`. A
-  navigation that needs the other engine rebuilds the frame, so switching between a normal site
-  and a chat site Just Works. `public/cfg.js` replaces Ultraviolet's stock config because that
-  one hardcodes root-absolute paths, which break on a `/<repo>/` project site.
+- Three rewriters ship, all inside the one service worker and told apart by URL prefix:
+  **Scramjet 1** (`m/p1/`), **Ultraviolet** (`m/p2/`) and **Scramjet 2** (`m/p3/`). The engine
+  picker has four settings and defaults to **Smart**: Ultraviolet on the chat sites (its uploads
+  work where Scramjet v1's hang) and Scramjet 2 everywhere else. The chat-site list is
+  `AI_HOSTS` in `public/app.js`. A navigation that needs a different engine rebuilds the frame,
+  so switching between a normal site and a chat site Just Works. `public/cfg.js` replaces
+  Ultraviolet's stock config because that one hardcodes root-absolute paths, which break on a
+  `/<repo>/` project site.
+- Scramjet 2 is wired differently from the other two, and the differences are load-bearing:
+  - Its controller is a **separate script** (`m/c3/`) that has to be handed the live service
+    worker, and the page must actually be **claimed** before a frame is built. A frame opened
+    while the page is merely registered has its requests go straight past the worker to the
+    static host, which answers a bare `404`.
+  - It does **not** use bare-mux. It takes a transport object directly, and it wants libcurl 2,
+    which is aliased in beside the older libcurl the other two use (`m/t3/` against `m/t1/`).
+  - Its proxied URLs are `m/p3/<controller id>/<frame id>/<address>`, with the address left
+    unencoded -- so reading the real address back means stripping two path segments, not a
+    layer of encoding. `unprefixScramjet2()` in `public/app.js` does that.
+  - It announces nothing on navigation, so the address bar is polled rather than pushed to.
 - **Asset names are de-signatured.** Everything the browser fetches lives under `public/m/`
   with neutral names (`m/e1/e1.js`, `m/e2/e2.js`, `m/p1/`, `m/p2/`, ...) rather than
   `scram/scramjet.all.js`, `/uv/service/` and friends, which content-inspecting school filters

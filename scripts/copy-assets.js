@@ -14,6 +14,16 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const { scramjetPath } = require("@mercuryworkshop/scramjet/path");
+// Scramjet 2 is installed under an alias so that it and v1 can both be on
+// disk: the engine picker offers each of them, and one is not a drop-in
+// replacement for the other. Its controller -- the half that talks to the
+// service worker -- is a separate package in v2.
+const { scramjetPath: scramjet2Path } = require("scramjet2/path");
+const controller2Path = dirname(require.resolve("@mercuryworkshop/scramjet-controller"));
+// Scramjet 2 needs libcurl 2, which is not what the other two engines run on,
+// so it is aliased in beside the older one rather than replacing it. Resolved
+// rather than imported: its entry point throws outside a browser.
+const libcurl2Path = dirname(require.resolve("libcurl2"));
 const { libcurlPath } = require("@mercuryworkshop/libcurl-transport");
 const { baremuxPath } = require("@mercuryworkshop/bare-mux/node");
 // epoxy publishes no path helper, so locate its dist through the entry point.
@@ -41,8 +51,35 @@ const targets = [
       "scramjet.wasm.wasm": "e1.wasm",
     },
   },
+  {
+    // Scramjet 2's core. Only the IIFE build and the wasm are wanted: the ESM
+    // twin and the wasm-inlined bundle are another 2.7 MB that nothing loads,
+    // and the service worker cannot importScripts an ES module anyway.
+    dest: "m/e3",
+    src: scramjet2Path,
+    filter: (s) =>
+      !s.endsWith(".mjs") && !basename(s).startsWith("scramjet_bundled") && !s.includes("temp-types-build"),
+    rename: {
+      "scramjet.js": "e3.js",
+      "scramjet.wasm": "e3.wasm",
+    },
+  },
+  {
+    // Scramjet 2's controller: the page half (api), the service worker half
+    // (sw), and the script injected into each proxied frame (inject).
+    dest: "m/c3",
+    src: controller2Path,
+    filter: (s) => !basename(s).startsWith("controller-external"),
+    rename: {
+      "controller.api.js": "c3a.js",
+      "controller.sw.js": "c3w.js",
+      "controller.inject.js": "c3i.js",
+    },
+  },
   { dest: "m/mx", src: baremuxPath },
   { dest: "m/t1", src: libcurlPath },
+  // Only the ESM bundle, as with epoxy below.
+  { dest: "m/t3", src: libcurl2Path, filter: (s) => !s.endsWith("index.js") },
   // Only the ESM bundle: the CommonJS twin is another 1.7 MB nobody loads.
   { dest: "m/t2", src: epoxyPath, filter: (s) => !s.endsWith("index.js") && !s.endsWith(".cjs") },
   {

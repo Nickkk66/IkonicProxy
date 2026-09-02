@@ -145,21 +145,26 @@ function isAiSite(url) {
 }
 
 /**
- * The engine preference: "auto" (Smart, the default), or a forced "scramjet" /
- * "uv". Both rewriters live in the one service worker and share the transport,
- * so the choice only decides which kind of frame a page opens in.
+ * The engine preference: "auto" (Smart, the default), or a forced
+ * "scramjet2" / "scramjet" / "uv". All three rewriters live in the one service
+ * worker, so the choice only decides which kind of frame a page opens in.
  */
+const ENGINES = ["scramjet2", "scramjet", "uv"];
+
 function getEnginePref() {
   const v = localStorage.getItem(ENGINE_KEY);
-  return v === "scramjet" || v === "uv" ? v : "auto";
+  return ENGINES.includes(v) ? v : "auto";
 }
 
 /** Which engine a given URL should actually open in. */
 function resolveEngine(url) {
   const pref = getEnginePref();
   if (pref !== "auto") return pref;
-  // Smart: Ultraviolet for the chat sites (uploads), Scramjet for the rest.
-  return isAiSite(url) ? "uv" : "scramjet";
+  // Smart: Ultraviolet for the chat sites (uploads), Scramjet 2 for the rest.
+  // Version 1 stays a manual choice rather than a fallback: it is the engine
+  // that crashes the tab on a YouTube watch page, so nothing is routed onto
+  // it without being asked for.
+  return isAiSite(url) ? "uv" : "scramjet2";
 }
 
 function setStatus(msg, kind = "") {
@@ -280,7 +285,7 @@ function revealSettings() {
   (lockedEl.hidden ? wispInput : pwInput).focus();
 }
 
-const ENGINE_NAMES = { auto: "Smart", scramjet: "Scramjet", uv: "Ultraviolet" };
+const ENGINE_NAMES = { auto: "Smart", scramjet2: "Scramjet 2", scramjet: "Scramjet 1", uv: "Ultraviolet" };
 
 for (const input of engineInputs) {
   input.checked = input.value === getEnginePref();
@@ -290,7 +295,7 @@ for (const input of engineInputs) {
     // Any live frame belongs to the old choice, so it goes; the next page
     // opens under the new one.
     exitBrowser();
-    const how = input.value === "auto" ? "Smart: Ultraviolet on chat sites, Scramjet elsewhere." : `Using ${ENGINE_NAMES[input.value]}.`;
+    const how = input.value === "auto" ? "Smart: Ultraviolet on chat sites, Scramjet 2 elsewhere." : `Using ${ENGINE_NAMES[input.value]}.`;
     setStatus(how, "ok");
   });
 }
@@ -301,7 +306,7 @@ for (const input of transportInputs) {
     if (!input.checked) return;
     localStorage.setItem(TRANSPORT_KEY, input.value);
     // Force the next navigation to dial again through the new transport.
-    connecting = null;
+    forgetTransports();
     setStatus(`Using ${input.value}. Open a page to try it.`, "ok");
   });
 }
@@ -340,8 +345,8 @@ saveBtn.addEventListener("click", () => {
   }
   localStorage.setItem(WISP_KEY, url);
   wispInput.value = url;
-  // Drop the cached transport so the next navigation dials the new address.
-  connecting = null;
+  // Drop the cached transports so the next navigation dials the new address.
+  forgetTransports();
   setStatus("Saved: " + url, "ok");
   probeBackend();
 });
@@ -349,7 +354,7 @@ saveBtn.addEventListener("click", () => {
 resetBtn.addEventListener("click", () => {
   localStorage.removeItem(WISP_KEY);
   wispInput.value = defaultWisp();
-  connecting = null;
+  forgetTransports();
   setStatus("Reset to the default backend.", "ok");
   probeBackend();
 });
@@ -378,6 +383,207 @@ scramjet.init();
 
 const connection = new BareMux.BareMuxConnection(BASE + "m/mx/worker.js");
 
+// --- Scramjet 2 ------------------------------------------------------------
+//
+// Version 2 is a different shape from version 1 and from Ultraviolet, so it
+// gets its own setup rather than joining theirs. Two differences matter here:
+// its controller is a separate script that has to be handed the live service
+// worker, and it does not go through bare-mux -- it takes a transport object
+// directly, which is why the wisp address is dialled again below rather than
+// reusing the one the other two share.
+const SCRAMJET2_PREFIX = BASE + "m/p3/";
+
+/**
+ * Resolves once this page is under the service worker. Gives up after a while
+ * rather than hanging: a page that is never claimed is broken either way, and
+ * failing loudly beats spinning forever.
+ */
+function waitForController(timeout = 10000) {
+  if (navigator.serviceWorker.controller) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      navigator.serviceWorker.removeEventListener("controllerchange", done);
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, timeout);
+    navigator.serviceWorker.addEventListener("controllerchange", done);
+  });
+}
+
+/**
+ * The real address out of a version 2 proxied URL.
+ *
+ * Version 1 and Ultraviolet both put a single encoded blob after their prefix.
+ * Version 2 puts the controller's id, then the frame's id, then the address --
+ * and it writes that address two different ways. Sometimes it is encoded whole,
+ * query string and all, into one path segment; sometimes it is written out
+ * plainly, in which case its query ends up in the outer URL's query, mixed in
+ * with the parameters the engine adds for its own use. Those all begin with a
+ * "$" and are not part of the address.
+ */
+function unprefixScramjet2(href) {
+  let outer;
+  try {
+    outer = new URL(href);
+  } catch {
+    return "";
+  }
+
+  const at = outer.pathname.indexOf(SCRAMJET2_PREFIX);
+  if (at === -1) return "";
+  const rest = outer.pathname.slice(at + SCRAMJET2_PREFIX.length).split("/").slice(2).join("/");
+  if (!rest) return "";
+
+  // Decoding tells the two shapes apart: if what comes back is an absolute
+  // URL then that segment held the whole address and there is nothing to add.
+  try {
+    const decoded = decodeURIComponent(rest);
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(decoded)) return decoded;
+  } catch {}
+
+  const params = new URLSearchParams(outer.search);
+  for (const key of [...params.keys()]) {
+    if (key.startsWith("$")) params.delete(key);
+  }
+  const query = params.toString();
+  return rest + (query ? "?" + query : "") + outer.hash;
+}
+
+let scramjet2Controller = null;
+let scramjet2Ready = null;
+// Guards the rebuild below against looping when the worker is broken for
+// some reason rebuilding cannot fix. Reset by the first page that loads.
+let scramjet2Rebuilds = 0;
+
+// A worker that has been replaced knows nothing the old one was told, and the
+// controller is bound to the old one, so it has to be built again.
+if (navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    scramjet2Ready = null;
+    scramjet2Controller = null;
+  });
+}
+
+/**
+ * The advert blocklist, wrapped around a transport.
+ *
+ * The service worker already refuses these hosts, and for version 1 and
+ * Ultraviolet that is the whole story, because every request a proxied page
+ * makes goes through it. Version 2 fetches a page's subresources itself, so
+ * the worker never sees most of them -- which is how an advert host that is
+ * blocked everywhere else still cost five seconds and still hung the page.
+ * Refusing them here catches both paths, since everything version 2 sends
+ * leaves through this object.
+ */
+function blocking(Transport) {
+  return class BlockingTransport extends Transport {
+    request(remote, method, body, headers, signal) {
+      if (isBlockedHost(remote && remote.hostname)) {
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+      return super.request(remote, method, body, headers, signal);
+    }
+
+    connect(url, ...rest) {
+      if (isBlockedHost(url && url.hostname)) throw new TypeError("Failed to fetch");
+      return super.connect(url, ...rest);
+    }
+  };
+}
+
+function ensureScramjet2() {
+  if (!scramjet2Ready) {
+    scramjet2Ready = (async () => {
+      // Order matters: the controller's script expects the engine's globals to
+      // already be there when it runs.
+      await loadScript(BASE + "m/e3/e3.js");
+      await loadScript(BASE + "m/c3/c3a.js");
+
+      const registration = await registerSW();
+      // Wait to actually be claimed. On the very first load the worker is
+      // active but not yet controlling this page, and a frame opened in that
+      // window has its requests go straight past the worker to the static host,
+      // which answers a bare 404 -- so the page must be controlled before any
+      // frame is built, not merely registered.
+      await waitForController();
+      const worker = navigator.serviceWorker.controller || registration.active;
+      if (!worker) throw new Error("no active service worker for Scramjet 2");
+
+      const wisp = getWispUrl();
+      // Version 2 wants libcurl 2, which is a different package from the one
+      // bare-mux is given; epoxy is the same build for both.
+      const path = getTransport() === "epoxy" ? "m/t2/index.mjs" : "m/t3/index.mjs";
+      const { default: Transport } = await import(BASE + path);
+
+      scramjet2Controller = new $scramjetController.Controller({
+        serviceworker: worker,
+        transport: new (blocking(Transport))({ wisp }),
+        config: {
+          prefix: SCRAMJET2_PREFIX,
+          scramjetPath: BASE + "m/e3/e3.js",
+          injectPath: BASE + "m/c3/c3i.js",
+          wasmPath: BASE + "m/e3/e3.wasm",
+          // Not a file on disk -- it is the name a proxied page fetches the
+          // engine's wasm under, so it is renamed for the same reason the real
+          // files are.
+          virtualWasmPath: "e3.wasm.js",
+        },
+        scramjetConfig: {
+          ...$scramjet.defaultConfig,
+          flags: {
+            ...$scramjet.defaultConfig.flags,
+            // Off. Source maps are a debugging aid, and paying for them means
+            // building one for every script the engine rewrites -- on a site
+            // that ships a multi-megabyte bundle that is a large amount of
+            // memory and work spent on something nobody here will ever read.
+            sourcemaps: false,
+          },
+        },
+      });
+      await scramjet2Controller.wait();
+      return scramjet2Controller;
+    })();
+    scramjet2Ready.catch(() => {
+      scramjet2Ready = null;
+      scramjet2Controller = null;
+    });
+  }
+  return scramjet2Ready;
+}
+
+/**
+ * Scramjet 2's frame in the shape the rest of this file expects: the same
+ * go/back/forward/reload as the other two, plus a `url` read back out of the
+ * proxied document's own location. Unlike version 1 it binds to an iframe that
+ * is already on the page, so the element arrives already mounted.
+ */
+function createScramjet2Frame(el) {
+  const frame = scramjet2Controller.createFrame(el);
+
+  return {
+    frame: el,
+    go(url) {
+      frame.go(url);
+    },
+    back() {
+      frame.back();
+    },
+    forward() {
+      frame.forward();
+    },
+    reload() {
+      frame.reload();
+    },
+    get url() {
+      return unprefixScramjet2(el.contentWindow?.location?.href || "");
+    },
+    // Version 1 fires urlchange; version 2 does not without a plugin, and the
+    // frame's own load event covers it the same way it does for Ultraviolet.
+    addEventListener() {},
+  };
+}
+
 async function registerSW() {
   if (!navigator.serviceWorker) {
     throw new Error(
@@ -386,8 +592,9 @@ async function registerSW() {
         : "This browser does not support service workers."
     );
   }
-  await navigator.serviceWorker.register(BASE + "sw.js", { scope: BASE });
+  const registration = await navigator.serviceWorker.register(BASE + "sw.js", { scope: BASE });
   await navigator.serviceWorker.ready;
+  return registration;
 }
 
 function toUrl(input) {
@@ -607,12 +814,93 @@ function createUltravioletFrame() {
   };
 }
 
+/**
+ * Build Scramjet 2 again and reopen the page.
+ *
+ * The browser evicts an idle service worker whenever it likes, and the copy
+ * that comes back has none of the routing the controller gave the last one.
+ * A proxied request then falls straight through the worker to the static host,
+ * which answers a bare 404 -- so a page that worked a minute ago is suddenly
+ * three characters of plain text. Nothing can repair that from inside the
+ * frame: the controller is bound to a worker that is gone, so both it and the
+ * frame have to be made again.
+ */
+function rebuildScramjet2() {
+  if (scramjet2Rebuilds >= 3) return false;
+  scramjet2Rebuilds++;
+
+  const url = lastRequestedUrl;
+  forgetTransports();
+  if (activeFrame) {
+    activeFrame.frame.remove();
+    activeFrame = null;
+    activeEngine = null;
+  }
+  openUrl(url);
+  return true;
+}
+
+/**
+ * Switch off view transitions inside a proxied page.
+ *
+ * This is what stops the tab dying on YouTube. Every one of the crash dumps
+ * ends the same way: the Compositor thread aborts inside Edge's own
+ * CalculateDrawProperties -- the pass that checks the layer and property trees
+ * blink hands it -- and the checks that page content can reach there are
+ * the view-transition ones: duplicate transition element ids across effect
+ * nodes, transition targets with no surface to land on. YouTube runs a view
+ * transition when it moves from the feed to a video. On the real site its
+ * embedded frames are cross-origin and each get a compositor of their own;
+ * through here every frame is this one origin, so all of them share one
+ * compositor, and that is exactly where those checks trip. It is an
+ * official-build CHECK, so there is no exception to catch and nothing to
+ * retry -- the renderer is simply gone.
+ *
+ * Taking the name off every element (and the root, which otherwise carries
+ * one implicitly) leaves the transition nothing to capture, so
+ * startViewTransition() runs to completion with no snapshot layers and the
+ * compositor never sees the situation it cannot handle. The cost is the
+ * morph animation between pages, which nobody misses next to a dead tab.
+ * Applied to every proxied page rather than only YouTube: the trigger is the
+ * shared origin, which every site here has.
+ *
+ * The <style> lives in the proxied document, so it survives the site's own
+ * in-page navigations; a full load fires this again from the load hook.
+ */
+function guardCompositor(frame) {
+  let doc;
+  try {
+    doc = frame.frame.contentDocument;
+  } catch {
+    return;
+  }
+  if (!doc || doc.getElementById("ikonic-guard")) return;
+  const style = doc.createElement("style");
+  style.id = "ikonic-guard";
+  style.textContent = "*, html, :root { view-transition-name: none !important; }";
+  (doc.head || doc.documentElement).appendChild(style);
+}
+/** The attributes every proxied frame carries, whichever engine built it. */
+function dressFrame(el) {
+  el.id = "frame";
+  el.setAttribute("allow", "fullscreen; clipboard-read; clipboard-write");
+}
+
 function ensureFrame(engine) {
   if (activeFrame) return activeFrame;
 
-  const frame = engine === "uv" ? createUltravioletFrame() : scramjet.createFrame();
-  frame.frame.id = "frame";
-  frame.frame.setAttribute("allow", "fullscreen; clipboard-read; clipboard-write");
+  let frame;
+  if (engine === "scramjet2") {
+    // Scramjet 2 binds to an iframe that is already in the document, so this
+    // one is built, dressed and mounted before the frame is made from it.
+    const el = document.createElement("iframe");
+    dressFrame(el);
+    viewport.appendChild(el);
+    frame = createScramjet2Frame(el);
+  } else {
+    frame = engine === "uv" ? createUltravioletFrame() : scramjet.createFrame();
+    dressFrame(frame.frame);
+  }
   // Scramjet reports the real (unproxied) location as the page navigates.
   frame.addEventListener("urlchange", (event) => {
     if (event.url) showAddress(event.url);
@@ -627,10 +915,24 @@ function ensureFrame(engine) {
     // the proxy hands back the error page. Retry a few times behind the spinner
     // (which covers the error page) so it works without the user doing anything.
     let isErrorPage = false;
+    // The static host's own 404 -- three characters and no title -- means the
+    // worker never routed this at all. Only Scramjet 2 can land here, and only
+    // by losing its worker, so that is what gets rebuilt.
+    let isUnrouted = false;
     try {
-      const b = frame.frame.contentDocument && frame.frame.contentDocument.body;
+      const doc = frame.frame.contentDocument;
+      const b = doc && doc.body;
       isErrorPage = !!(b && b.hasAttribute("data-ikonic-error"));
+      isUnrouted = !!(doc && !doc.title && b && b.textContent.trim() === "404");
     } catch {}
+
+    if (isUnrouted && activeEngine === "scramjet2" && lastRequestedUrl) {
+      setLoading(true);
+      if (rebuildScramjet2()) return;
+    }
+    // Whatever this page is, it is not the static 404, so the engine is
+    // talking to its worker again and the next failure deserves its own budget.
+    scramjet2Rebuilds = 0;
     if (isErrorPage && lastRequestedUrl) {
       frame._retries = frame._retries || 0;
       if (frame._retries < 5) {
@@ -646,6 +948,7 @@ function ensureFrame(engine) {
     try {
       showAddress(frame.url);
     } catch {}
+    guardCompositor(frame);
   });
   viewport.appendChild(frame.frame);
   activeFrame = frame;
@@ -657,6 +960,17 @@ function ensureFrame(engine) {
 // navigation depends on them -- including ones typed into the toolbar, which
 // would otherwise reach the static host and come back as a bare 404.
 let connecting = null;
+
+/**
+ * Throw away every dialled transport so the next navigation reconnects. Both
+ * stacks have to go: changing the backend address or the transport invalidates
+ * bare-mux and Scramjet 2's own connection alike.
+ */
+function forgetTransports() {
+  connecting = null;
+  scramjet2Ready = null;
+  scramjet2Controller = null;
+}
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -770,8 +1084,14 @@ async function openUrl(url, sourceEl) {
   setLoading(true);
 
   try {
-    await ensureConnected();
-    if (want === "uv") await ensureUltraviolet();
+    // Each engine brings up its own plumbing: Scramjet 2 has a transport of
+    // its own, so bare-mux is only dialled for the two that share it.
+    if (want === "scramjet2") {
+      await ensureScramjet2();
+    } else {
+      await ensureConnected();
+      if (want === "uv") await ensureUltraviolet();
+    }
     lastRequestedUrl = url;
     const frame = ensureFrame(want);
     frame._retries = 0; // a fresh navigation gets its own retry budget
@@ -1237,6 +1557,35 @@ function ensureAI() {
   return aiFrame;
 }
 
+// Keep the service worker alive while a page is open.
+//
+// The browser evicts an idle worker after roughly half a minute, and the copy
+// that comes back has none of the routing Scramjet 2's controller gave the
+// last one; its attempt to re-pair fails ("All clients returned an invalid
+// MessagePort"), and from then on every request the page makes falls through
+// the worker to the static host and comes back as a bare 404. That is how a
+// YouTube page can load its document and then never load anything else.
+// A worker that handles a request every twenty seconds is never idle, so it
+// is never evicted, so none of that happens. The rebuild in ensureFrame is
+// still there for the cases this cannot cover, such as a worker update.
+setInterval(() => {
+  if (!activeFrame || !document.body.classList.contains("browsing")) return;
+  fetch(BASE + "keepalive", { cache: "no-store" }).catch(() => {});
+}, 20000);
+
+// Version 1 announces every navigation; version 2 and Ultraviolet do not, and
+// a move made inside the page fires no load event either -- so the address is
+// polled instead of waited for. It costs one property read, and only while a
+// page is actually up.
+setInterval(() => {
+  if (!activeFrame || !document.body.classList.contains("browsing")) return;
+  let url = "";
+  try {
+    url = activeFrame.url;
+  } catch {}
+  if (url && url !== currentUrl) showAddress(url);
+}, 700);
+
 // Restore the last logged error so the pass-phrase panel shows it after a
 // reload -- IkonAI failures get logged here even though it has no address bar.
 const savedDiag = localStorage.getItem(DIAG_KEY);
@@ -1255,6 +1604,13 @@ address.focus();
 // spinning, which reads as the app being slow rather than quietly getting ready.
 addEventListener("load", () => {
   const warm = () => {
+    // Warm whichever stack the next page will actually use, so the waiting is
+    // done before there is anything to wait for rather than during it.
+    const pref = getEnginePref();
+    if (pref === "auto" || pref === "scramjet2") {
+      ensureScramjet2().catch(() => {});
+      return;
+    }
     ensureConnected()
       .then(() => warmConnection())
       .catch(() => {});
