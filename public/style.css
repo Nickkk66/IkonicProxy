@@ -757,3 +757,39 @@ body.fs #toolbar:hover { transform: translateY(0); }
   #toolbar.loading::after { width: 100%; opacity: 0.5; }
   .ring { border-top-color: var(--accent); opacity: 0.7; }
 }
+
+/* The access-code gate: a small card under the search box, styled like the
+   settings panel so it reads as part of the same thing. */
+.gate {
+  max-width: 26rem;
+  margin: 1.1rem auto 0;
+  padding: 0.9rem 1rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--chrome);
+  text-align: left;
+}
+.gate input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--field);
+  color: var(--fg);
+  font: 0.92rem var(--sans);
+}
+.gate input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.gate button {
+  flex: 0 0 auto;
+  padding: 0.6rem 1rem;
+  border: 0;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #0c1020;
+  font: 600 0.9rem var(--sans);
+  cursor: pointer;
+}
+.gate button:disabled { opacity: 0.6; cursor: default; }
+.gate .hint.err { color: var(--err); }
+.gate #gatemsg { margin: 0.6rem 0 0; min-height: 1.2em; }

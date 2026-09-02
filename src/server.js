@@ -5,20 +5,23 @@
 //   2. terminates the wisp websocket at /wisp/ -- this is the part that
 //      actually opens sockets to target sites, and the only part that MUST
 //      run on your machine once the frontend lives on GitHub Pages.
+//
+// It also answers POST /unlock: the page sends the access code, and gets the
+// backend token back if the code is right. That is the whole reason a shared
+// link is safe to share -- see src/token.js.
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { server as wisp, logging } from "@mercuryworkshop/wisp-js/server";
-import { ensureToken } from "./token.js";
+import { ensureToken, ensureAccessCode, readAccessCode, accessCodeMatches } from "./token.js";
 import { loadTCPSocket, CONNECT_TIMEOUT } from "./tcp.js";
 
 const publicPath = fileURLToPath(new URL("../public/", import.meta.url));
-const APP_JS = fileURLToPath(new URL("../public/app.js", import.meta.url));
-const TOKEN_LINE = /const WISP_TOKEN = "[^"]*";/;
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const { token: WISP_TOKEN, created: TOKEN_IS_NEW } = ensureToken();
+const { code: ACCESS_CODE_AT_START, created: CODE_IS_NEW } = ensureAccessCode();
 
 logging.set_level(logging.WARN);
 // WISP_DNS=1.1.1.1,1.0.0.1 sends lookups to those servers instead of the
@@ -58,12 +61,106 @@ const MIME = {
   ".ico": "image/x-icon",
 };
 
-const server = createServer(async (req, res) => {
-  // The frontend is served from a different origin (github.io) than this
-  // backend, so allow it to read anything static we hand out.
-  res.setHeader("Access-Control-Allow-Origin", "*");
+// --- the access-code gate --------------------------------------------------
+//
+// A wrong code costs a second, and a burst of them costs everyone a pause: the
+// code is short enough to be said aloud, so it has to be too slow to guess.
+// Global rather than per-address because behind a tunnel every visitor arrives
+// from the tunnel's own addresses, so per-address limits would be no limit.
+const WRONG_DELAY = 1000;
+const BURST_LIMIT = 8;
+const BURST_WINDOW = 60_000;
+const BURST_PAUSE = 30_000;
+let wrongAttempts = [];
+let pausedUntil = 0;
 
-  let path = decodeURIComponent(new URL(req.url, "http://x").pathname);
+function readBody(req, limit = 4096) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+function json(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+}
+
+async function unlock(req, res) {
+  const now = Date.now();
+  if (now < pausedUntil) {
+    json(res, 429, { error: "Too many wrong codes. Try again in a bit." });
+    return;
+  }
+
+  let given = "";
+  try {
+    const body = await readBody(req);
+    given = String(JSON.parse(body || "{}").code || "");
+  } catch {
+    json(res, 400, { error: "Send { \"code\": \"...\" }." });
+    return;
+  }
+
+  // Read fresh each time, so a code changed from the setup menu applies without
+  // a restart -- the token still needs one, this does not.
+  const expected = readAccessCode();
+  if (expected && accessCodeMatches(given, expected)) {
+    wrongAttempts = [];
+    json(res, 200, { token: WISP_TOKEN });
+    return;
+  }
+
+  wrongAttempts = wrongAttempts.filter((t) => now - t < BURST_WINDOW);
+  wrongAttempts.push(now);
+  if (wrongAttempts.length >= BURST_LIMIT) {
+    pausedUntil = now + BURST_PAUSE;
+    wrongAttempts = [];
+  }
+  await new Promise((r) => setTimeout(r, WRONG_DELAY));
+  json(res, 401, { error: "Wrong access code." });
+}
+
+const server = createServer(async (req, res) => {
+  // The frontend may be served from a different origin (github.io) than this
+  // backend, so allow it to read anything static we hand out, and to POST the
+  // access code. The preflight is what a cross-origin JSON POST triggers.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "content-type");
+
+  let path;
+  try {
+    path = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  } catch {
+    res.writeHead(400).end("bad request");
+    return;
+  }
+
+  if (path === "/unlock") {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204).end();
+      return;
+    }
+    if (req.method !== "POST") {
+      res.writeHead(405).end("method not allowed");
+      return;
+    }
+    await unlock(req, res);
+    return;
+  }
+
   if (path.endsWith("/")) path += "index.html";
 
   // Reject traversal outside public/. resolve() drops the trailing separator,
@@ -76,14 +173,7 @@ const server = createServer(async (req, res) => {
   }
 
   try {
-    let body = await readFile(full);
-    // app.js is committed to a public repo, so it ships with an empty
-    // WISP_TOKEN and is given the real one here, on the way out. GitHub Pages
-    // does the same from a repository secret -- see the Pages workflow. Either
-    // way the token reaches the browser without ever entering git.
-    if (full === APP_JS) {
-      body = body.toString("utf8").replace(TOKEN_LINE, `const WISP_TOKEN = "${WISP_TOKEN}";`);
-    }
+    const body = await readFile(full);
     res.writeHead(200, {
       "Content-Type": MIME[extname(full).toLowerCase()] || "application/octet-stream",
       // Service workers must be allowed to control the whole path.
@@ -129,9 +219,11 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`frontend  http://localhost:${PORT}`);
   console.log(`wisp      ws://localhost:${PORT}/wisp/${WISP_TOKEN}/`);
+  console.log(`access    ${ACCESS_CODE_AT_START}`);
   if (TOKEN_IS_NEW) {
     console.log("\nA backend token was generated and saved to .wisp-token.");
-    console.log("The address above is now a credential -- treat it like a password.");
-    console.log("Pages deploys need it as the WISP_TOKEN repository secret; pages.yml has the details.");
+  }
+  if (CODE_IS_NEW) {
+    console.log("An access code was generated and saved to .access-code -- that is what you give people.");
   }
 });

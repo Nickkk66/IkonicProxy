@@ -6,3 +6,5 @@ package-lock.json
 .tunnel.pid
 .tunnel.url
 .wisp-token
+.access-code
+.ikonic.json

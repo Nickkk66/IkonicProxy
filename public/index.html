@@ -72,6 +72,17 @@
 
         <p id="status" role="status"></p>
 
+        <!-- Shown until this browser has the backend token, which it gets from
+             the backend in exchange for the access code. -->
+        <section id="gate" class="gate" hidden>
+          <p class="hint">This proxy needs an access code. Ask whoever gave you the link.</p>
+          <div class="row">
+            <input id="code" type="text" placeholder="access code" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Access code" />
+            <button id="enter" type="button">Enter</button>
+          </div>
+          <p id="gatemsg" class="hint"></p>
+        </section>
+
         <nav class="ai" aria-label="AI">
           <button type="button" data-url="https://duck.ai/">
             <img src="icons/duckai.ico" alt="" width="20" height="20" />

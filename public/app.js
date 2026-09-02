@@ -14,14 +14,21 @@ const DEFAULT_WISP = "wss://think-achievement-brochure-readings.trycloudflare.co
 // /wisp/<token>/. The backend refuses the upgrade without it, which is what
 // stops the tunnel address from being an open relay through the home PC.
 //
-// Deliberately empty here: this file is committed to a public repo, so the
-// token is substituted on the way to the browser instead -- by src/server.js
-// when it serves this file, and by the Pages workflow from a repository
-// secret. Editing it by hand works, but commits the credential.
-//
-// It still ends up readable by anyone who loads the site. It gates people who
-// turn up the tunnel hostname on its own; it is not per-user authentication.
-const WISP_TOKEN = "";
+// It is not in this file, and it is not in any file the browser is given. The
+// page asks the backend for it, and the backend hands it over only in return
+// for the access code -- so a link on its own is worth nothing, and the code
+// is what gets passed around. Once unlocked the token is kept in this
+// browser; it is dropped again the moment the backend stops accepting it,
+// which is what a changed secret or a changed code looks like from here.
+const TOKEN_KEY = "ikonic.token";
+
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+
+function forgetToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
 
 // SHA-256 of the settings password. Hashed rather than stored literally so the
 // password itself isn't sitting in a public repo. NOTE: this is a client-side
@@ -93,19 +100,121 @@ function defaultWisp() {
   if (!/.github.io$/i.test(host)) {
     return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + wispPath();
   }
-  // DEFAULT_WISP is stored without the secret, for the same reason WISP_TOKEN
-  // is empty above -- it is a committed file.
+  // DEFAULT_WISP is stored without the secret: this is a committed file, and
+  // the secret only ever arrives in exchange for the access code.
   return withToken(DEFAULT_WISP);
 }
 
-/** The backend's socket path, with the shared secret when one is configured. */
+/** The backend's socket path, with the shared secret once it is known. */
 function wispPath() {
-  return WISP_TOKEN ? `/wisp/${WISP_TOKEN}/` : "/wisp/";
+  const token = getToken();
+  return token ? `/wisp/${token}/` : "/wisp/";
 }
 
 /** Swaps a bare .../wisp/ tail for the token-carrying one. */
 function withToken(url) {
-  return WISP_TOKEN ? url.replace(/\/wisp\/?$/, wispPath()) : url;
+  return getToken() ? url.replace(/\/wisp\/?$/, wispPath()) : url;
+}
+
+/**
+ * Where the backend answers HTTP -- the unlock endpoint lives there. Same
+ * origin as this page unless the page came from GitHub Pages, in which case it
+ * is whatever the wisp address points at, with the scheme swapped back.
+ */
+function backendHttp() {
+  try {
+    const u = new URL(getWispUrl());
+    u.protocol = u.protocol === "wss:" ? "https:" : "http:";
+    return u.origin;
+  } catch {
+    return location.origin;
+  }
+}
+
+// --- the access code ----------------------------------------------------
+
+const gate = document.getElementById("gate");
+const codeInput = document.getElementById("code");
+const codeBtn = document.getElementById("enter");
+const gateMsg = document.getElementById("gatemsg");
+
+let unlockWaiters = null;
+
+/**
+ * Resolves once a token is in hand: immediately if this browser already has
+ * one, otherwise after the code has been entered and accepted. Everything
+ * that opens a page waits on this, so the gate is not something a visitor can
+ * click past -- there is simply nothing to connect to without it.
+ */
+function ensureUnlocked() {
+  if (getToken()) return Promise.resolve();
+  if (unlockWaiters) return unlockWaiters.promise;
+
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  unlockWaiters = { promise, resolve };
+  gate.hidden = false;
+  codeInput.focus();
+  return promise;
+}
+
+async function submitCode() {
+  const code = codeInput.value.trim();
+  if (!code) return;
+  codeBtn.disabled = true;
+  gateMsg.textContent = "Checking…";
+  gateMsg.className = "hint";
+  try {
+    const res = await fetch(backendHttp() + "/unlock", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.token) {
+      gateMsg.textContent = body.error || "That code was not accepted.";
+      gateMsg.className = "hint err";
+      codeInput.select();
+      return;
+    }
+    localStorage.setItem(TOKEN_KEY, body.token);
+    codeInput.value = "";
+    gateMsg.textContent = "";
+    gate.hidden = true;
+    // The socket address changed shape (it now carries the token), so
+    // anything dialled without it has to be dialled again.
+    forgetTransports();
+    if (unlockWaiters) {
+      unlockWaiters.resolve();
+      unlockWaiters = null;
+    }
+    probeBackend();
+  } catch (err) {
+    gateMsg.textContent = "Could not reach the backend.";
+    gateMsg.className = "hint err";
+    reportFailure(err);
+  } finally {
+    codeBtn.disabled = false;
+  }
+}
+
+codeBtn.addEventListener("click", submitCode);
+codeInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") submitCode();
+});
+
+/**
+ * The backend said no to the token this browser has. That is what a rotated
+ * secret looks like from here: forget it, and ask for the code again the next
+ * time a page is opened.
+ */
+function tokenRejected() {
+  if (!getToken()) return;
+  forgetToken();
+  forgetTransports();
+  exitBrowser();
+  setStatus("The access code has changed. Enter the new one to carry on.", "err");
+  ensureUnlocked();
 }
 
 function getWispUrl() {
@@ -275,7 +384,10 @@ function probeBackend() {
   const timer = setTimeout(() => finish("down", "backend not responding"), 8000);
   socket.addEventListener("open", () => finish("ready", "backend ready"));
   socket.addEventListener("error", () => finish("down", "backend unreachable"));
-  socket.addEventListener("close", () => finish("down", "backend unreachable"));
+  // A refused upgrade closes without ever opening. With a token in hand that
+  // is the backend saying the token is no longer the right one -- only said
+  // when there was one to refuse, so an outage is not mistaken for a rotation.
+  socket.addEventListener("close", () => finish("down", getToken() ? "backend refused the token" : "backend unreachable"));
 }
 
 // --- settings --------------------------------------------------------------
@@ -546,9 +658,10 @@ function ensureScramjet2() {
       await scramjet2Controller.wait();
       return scramjet2Controller;
     })();
-    scramjet2Ready.catch(() => {
+    scramjet2Ready.catch((err) => {
       scramjet2Ready = null;
       scramjet2Controller = null;
+      if (/401|unauthori[sz]ed/i.test(String(err && (err.message || err)))) tokenRejected();
     });
   }
   return scramjet2Ready;
@@ -1086,6 +1199,8 @@ async function openUrl(url, sourceEl) {
   setLoading(true);
 
   try {
+    // Nothing connects without the token, and the token comes from the code.
+    await ensureUnlocked();
     // Each engine brings up its own plumbing: Scramjet 2 has a transport of
     // its own, so bare-mux is only dialled for the two that share it.
     if (want === "scramjet2") {
@@ -1547,6 +1662,7 @@ function ensureAI() {
 
   (async () => {
     try {
+      await ensureUnlocked();
       await ensureConnected();
       await ensureUltraviolet();
       aiFrame.go(IKONAI_URL);
@@ -1596,16 +1712,23 @@ if (savedDiag) {
   diagnostics.hidden = false;
 }
 
-probeBackend();
 renderBookmarks();
 selectTab("home");
-address.focus();
+if (getToken()) {
+  probeBackend();
+  address.focus();
+} else {
+  setBeacon("down", "needs the access code");
+  ensureUnlocked();
+}
 
 // Warm up IkonAI, but only once the page itself has finished loading and the
 // browser is idle -- kicking it off during load makes the whole tab sit there
 // spinning, which reads as the app being slow rather than quietly getting ready.
 addEventListener("load", () => {
   const warm = () => {
+    // Nothing to warm without the token; the first page will ask for the code.
+    if (!getToken()) return;
     // Warm whichever stack the next page will actually use, so the waiting is
     // done before there is anything to wait for rather than during it.
     const pref = getEnginePref();

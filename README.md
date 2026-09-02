@@ -8,7 +8,9 @@ A self-hosted [Scramjet](https://github.com/MercuryWorkshop/scramjet) deployment
 | Wisp backend (`src/server.js`) | Your PC | Opens the actual sockets; cannot run on Pages |
 
 GitHub Pages executes no server code, so the wisp backend **must** run on your machine and be
-reachable over `wss://`. Cloudflare Tunnel provides that for free without port forwarding.
+reachable over `wss://`. A tunnel provides that for free without port forwarding -- Cloudflare,
+Tailscale or Microsoft, picked during setup. Most people skip Pages entirely and just hand out
+the tunnel link: the backend serves the frontend too, so the link is the whole thing.
 
 ## How it works
 
@@ -47,6 +49,14 @@ TLS is done end-to-end by the transport in the browser -- it only opens sockets 
 hostnames it is told and copies bytes. That is why it can be so small, and why the
 secret in the path matters: whoever has the address can open sockets from your PC.
 
+**Sharing a link is safe** because the link alone does nothing. The backend's secret used to be
+written into the page it served, so whoever had the address had the proxy -- and rotating the
+address only helped until someone passed the new one on. Now the page carries no secret: it
+asks for an **access code**, sends it to the backend, and only then receives the token that
+opens the socket. You hand out the link *and* the code. The code can be changed any time
+without the address moving, wrong guesses cost a second each and a burst of them pauses the
+endpoint, and changing the backend secret logs every browser out at once.
+
 Two ways to run it:
 
 - **Locally.** Frontend and backend both from `http://localhost:8080` on your own PC.
@@ -62,73 +72,68 @@ Two ways to run it:
 npm run setup      # or double-click setup.cmd on Windows
 ```
 
-Checks that everything needed is present — Node 18+, dependencies, the browser assets in
-`public/`, the frontend files, and `cloudflared` — and offers to run `npm install` or
-`npm run assets` for whatever is missing. Then it opens a menu:
+The first run is a short walk-through, once:
+
+1. **Checks** -- Node 18+, dependencies, the browser assets in `public/m/`, the frontend
+   files, the two secrets, and whichever tunnel tool you pick. Anything missing that can be
+   fixed automatically (`npm install`, `npm run assets`) is offered on the spot.
+2. **Secrets** -- the *backend secret* (`.wisp-token`, generated, never leaves the PC) and
+   the *access code* (`.access-code`, generated as something sayable like `amber-fox-42`;
+   keep it or type your own). The code is what you give people.
+3. **How people reach it** -- just this PC, a **Cloudflare** quick tunnel, **Tailscale
+   Funnel**, or **Microsoft Dev Tunnels**. The tool you choose is installed if it is not
+   there (`winget` on Windows) and signed in if it needs to be. Change it any time with
+   *Run first-time setup again*.
+
+After that it is the menu:
 
 ```
-Proxy:  running on port 8080 (pid 22816)
-Tunnel: https://outlet-fleece-onion-compromise.trycloudflare.com
-
-  1) Open it locally (http://localhost:8080, no tunnel needed)
+╭─ Status ──────────────────────────────────────────╮
+│ Proxy   running  port 8080, pid 22816             │
+│ Tunnel  https://outlet-fleece.trycloudflare.com   │
+╰───────────────────────────────────────────────────╯
+  1) Open it locally  http://localhost:8080
   2) Stop the proxy
-  3) Stop the tunnel
-  4) Use that address as the site default (edits public/app.js)
-  5) Show the link and secret (copies the secret)
-  6) Change the backend secret
-  7) Close
+  3) Stop the tunnel  Cloudflare quick tunnel
+  4) Use that address as the Pages default  edits public/app.js
+  5) Show the link and access code  copies the code
+  6) Change the access code
+  7) Change the backend secret  logs everyone out
+  8) Run first-time setup again  tunnel provider, secrets, checks
+  9) Close
 ```
 
 Option 1 is the quick way up: it starts the proxy if it is not running and opens
-`http://localhost:8080` in your browser -- no tunnel, nothing to configure. The other entries
-flip to their opposite depending on what is running, so option 2 reads **Start the proxy**
-when it is stopped. Option 4 only appears once a tunnel address is known; it rewrites
-`DEFAULT_WISP` in `public/app.js` for you, which still has to be committed and pushed before
-the Pages site uses it.
+`http://localhost:8080` in your browser -- no tunnel, nothing to configure. Entries flip to
+their opposite depending on what is running. *Use that address as the Pages default* only
+appears once a tunnel address is known, and only matters if you deploy the frontend to Pages;
+served from the tunnel itself the page finds the backend on its own origin.
 
-Starting the proxy or the tunnel prints the same block option 4 does, and puts the secret on
-the clipboard ready to paste:
+Starting anything prints the same block option 5 does -- the link, the access code (put on the
+clipboard), and the plumbing underneath -- so the thing to send someone is always in front
+of you.
 
-```
-================================================================
- Backend
-================================================================
-  Link (always current, rotates)
-    https://think-achievement-brochure-readings.trycloudflare.com
-
-  Link (stable, needs the address below to be pushed)
-    https://nickkk66.github.io/scramjet-selfhost/
-
-  Backend address
-    wss://think-achievement-brochure-readings.trycloudflare.com/wisp/<secret>/
-
-  Secret  (copied to clipboard)
-    <secret>
-```
-
-The first link is the tunnel itself, which serves the frontend as well as the socket — it is
-same-origin, so it always works and never needs `DEFAULT_WISP` or the repository secret to be
-current. The catch is that it changes every time the tunnel restarts. The second is the Pages
-site, which is stable but only reaches the backend once the address below it has been pushed.
-
-Option 5 rotates the secret: it mints a new one, restarts the proxy so it takes effect, and
-prints the `gh secret set` line to run afterwards. Everyone on the old link is cut off
-immediately, including the deployed site until the repository secret is updated.
-
-Both the proxy and the tunnel are started detached — output in `proxy.log` and `tunnel.log`,
-pids in `.proxy.pid` and `.tunnel.pid` — so closing the menu leaves them running.
-Non-interactive forms for scripts and shortcuts:
+Non-interactive forms, for shortcuts and other scripts:
 
 ```bash
-node scripts/setup.js check          # checks only; exit 1 if something is missing
-node scripts/setup.js start
-node scripts/setup.js status         # proxy and tunnel
-node scripts/setup.js stop
-node scripts/setup.js tunnel         # prints the trycloudflare address
-node scripts/setup.js tunnel-stop
-node scripts/setup.js backend        # link, address and secret; copies the secret
+node scripts/setup.js local         # proxy up + browser open
+node scripts/setup.js start|stop    # the proxy
+node scripts/setup.js tunnel|tunnel-stop
+node scripts/setup.js status|check|backend|code
+node scripts/setup.js setup         # the first-time walk-through again
 ```
 
+### Tunnels
+
+| Provider | Account | Address | Notes |
+|---|---|---|---|
+| Cloudflare quick tunnel | none | new random name every start | zero setup; the name changes whenever the tunnel restarts |
+| Tailscale Funnel | free Tailscale | stable `<pc>.<tailnet>.ts.net` | best for people who come back; Funnel is enabled once per tailnet from the admin console, Tailscale prints the link |
+| Microsoft Dev Tunnels | free Microsoft | random `*.devtunnels.ms` per start | started with anonymous access on, so visitors need no account |
+
+All three end in an `https://` address forwarding to `localhost:8080`, which is what the
+service worker needs (no HTTPS, no service worker, no proxy). Raw TCP forwarders that hand
+out `http://` or a bare port will not work.
 ## Local development
 
 ```bash
@@ -267,6 +272,10 @@ which carries the real page along inside the replacement.
   decoration: `skipWaiting()` returns a promise, and calling it bare lets install finish first,
   at which point the worker is already parked in “waiting” and the call has nothing left to
   skip -- the exact failure the line is there to prevent.
+- **GitHub Pages needs no secret any more.** The workflow used to inject the backend token
+  into `app.js` from a repository secret; the page now earns the token with the access code,
+  so the only thing a Pages deploy needs is `DEFAULT_WISP` pointing at the backend's current
+  address (menu option *Use that address as the Pages default*, then commit and push).
 - **Adverts and trackers are refused outright**, listed in `public/blocked.js`. This is not a
   taste decision, it is what makes several sites work at all. A proxied page's real URLs are
   invisible to whatever ad blocker the browser has, so everything the blocker would normally
